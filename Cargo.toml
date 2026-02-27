@@ -1,0 +1,15 @@
+[package]
+name = "quota_update"
+version = "0.1.0"
+edition = "2024"
+
+[profile.dev]
+debug = 2
+opt-level = 0
+
+[dependencies]
+bindgen = "0.71.1"
+libc = "0.2.183"
+
+[build-dependencies]
+bindgen = "0.71.1"
