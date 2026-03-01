@@ -16,7 +16,7 @@ use libc::c_void;
  * @param ino: inode number
  * @param minor: minor timestamp
  */
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScoutwrapWalkInodesEntry {
     pub major: u64,
     pub ino: u64,
@@ -30,7 +30,7 @@ pub struct ScoutwrapWalkInodesEntry {
  * @param nr_entries: tells ScoutFS the limit of entry structs to fill the buffer with
  * @param index: see ScoutFS ioctl.h for which macro to set this with
  */
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScoutwrapWalkInodes {
     pub first: ScoutwrapWalkInodesEntry,
     pub last: ScoutwrapWalkInodesEntry,
@@ -42,9 +42,9 @@ pub struct ScoutwrapWalkInodes {
 
 /* WALK_INODES
  * Populates the entries_vec in user_arg to contain nr_entries entry structs from inodes within the minor:major range. This function allocates the buffer. The caller does not have to worry about setting up a buffer.  
- * It returns the user's struct back to them instead. 
+ * Moves the callers struct inside, modifies and returns it. 
  */
-pub fn scoutwrap_walk_inodes(root_fs: File, mut user_arg: ScoutwrapWalkInodes) -> Result<ScoutwrapWalkInodes, io::Error> {
+pub fn scoutwrap_walk_inodes(root_fs: &File, mut user_arg: ScoutwrapWalkInodes) -> Result<ScoutwrapWalkInodes, String> {
 
     // create scoutfs_ioctl_walk_inodes and entries structs
 
@@ -66,7 +66,7 @@ pub fn scoutwrap_walk_inodes(root_fs: File, mut user_arg: ScoutwrapWalkInodes) -
     unsafe {
         entries_ptr = libc::calloc(user_arg.nr_entries as usize, std::mem::size_of::<scoutfs_ioctl_walk_inodes_entry>());
         if entries_ptr.is_null() {
-
+            return Err(String::from("calloc returned -1"));
         }
     }
 
@@ -83,7 +83,7 @@ pub fn scoutwrap_walk_inodes(root_fs: File, mut user_arg: ScoutwrapWalkInodes) -
     let entries_c; 
     unsafe {
         if wrap_walk_inodes(root_fs.as_raw_fd(), &mut user) == -1 {
-            println!("wrap_walk_inodes failed");
+            return Err(String::from("wrap_walk_inodes failed"));
         }
 
         // takes ownership of the calloc buffer and will drop it
@@ -111,8 +111,6 @@ pub fn scoutwrap_walk_inodes(root_fs: File, mut user_arg: ScoutwrapWalkInodes) -
     user_arg.entries_vec = entries;
 
     Ok(user_arg)
-
-    
 
 }
 

@@ -5,7 +5,7 @@ use scoutwrap::*;
 
 use std::fs::OpenOptions;
 
-const BATCH_SIZE: usize = 128;
+const BATCH_SIZE: usize = 3;
 const FS_ROOT_PATH: &str = "/marfs/mdal-root2";
 
 fn main() {
@@ -42,8 +42,53 @@ fn main() {
         index: 0,
     };
 
-    user = scoutwrap_walk_inodes(fs_root, user).expect("falied to allocate buffer"); 
+    // process batches until entries vector is empty
+    loop {
 
-    println!("{:?}", user.entries_vec);
+        let user_res = scoutwrap_walk_inodes(&fs_root, user.clone()); 
 
+        match user_res {
+            Ok(u) => user = u,
+            Err(e) => {
+                println!("scoutwrap_walk_inodes: {}", e);
+                println!("skipping this batch");
+                continue;
+            }
+        }
+        
+        if user.entries_vec.is_empty() {
+            break;
+        }
+
+        let mut last_batch = false;
+        if user.entries_vec.len() < BATCH_SIZE {
+            last_batch = true;
+        }
+
+        let mut major = 0; // will never not be updated to a non-zero major
+        let mut ino = 0;
+        let mut minor = 0;
+        
+        // process all but last element: last will be starting point of next run
+        for entry in &user.entries_vec {
+            
+            // don't process the last entry of batches that are not the last. The last entry of the final batch will be processed.
+            if !last_batch && entry.ino == user.entries_vec.last().unwrap().ino {
+                user.first.major = user.entries_vec.last().unwrap().major; 
+                user.first.ino = user.entries_vec.last().unwrap().ino;
+                user.first.minor = user.entries_vec.last().unwrap().minor;
+                break;
+            }
+
+            major = entry.major;
+            ino = entry.ino;
+            minor = entry.minor;
+            println!("{:?}", entry);
+        }
+
+        if last_batch {
+            break;
+        }
+       
+    }
 }
