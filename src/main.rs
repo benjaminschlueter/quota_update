@@ -55,11 +55,9 @@ fn main() {
                 continue;
             }
         }
-        
-        if user.entries_vec.is_empty() {
-            break;
-        }
 
+        // batch vector will never be empty: last element always part of next for full batches and non-full batches will be the last batch
+        
         let mut last_batch = false;
         if user.entries_vec.len() < BATCH_SIZE {
             last_batch = true;
@@ -80,10 +78,36 @@ fn main() {
                 break;
             }
 
+
             major = entry.major;
             ino = entry.ino;
             minor = entry.minor;
-            println!("{:?}", entry);
+            
+            // skip inode 1 (root directory)
+            if ino == 1 {
+               continue;
+            }
+            
+            let path_struct = ScoutwrapInoPath {
+                ino: ino,
+                dir_ino: 0,
+                dir_pos: 0,
+                result_ptr: 0,
+                result_bytes: STR_BUF_SIZE,
+            };
+
+            // path ioctl
+            let path_res = scoutwrap_ino_path(&fs_root, path_struct.clone()); 
+            let path;
+            match path_res {
+                Ok(p) => path = p.path,
+                Err(e) => {
+                    println!("scoutwrap_path_ino: {}", e);
+                    continue;
+                }
+            }    
+
+            // println!("{:?}", path);
         }
 
         if last_batch {

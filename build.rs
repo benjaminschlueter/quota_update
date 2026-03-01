@@ -63,7 +63,7 @@ fn main() {
     let ioctl_path_str = ioctl_path.to_str().expect("Failed to convert header path to String");
     */
 
-    let wrap_ioctl_path = top_path.join("src/scoutfs-libs/wrap-scoutfs-ioctl.h");
+    let wrap_ioctl_path = top_path.join("src/scoutfs-libs/scoutwrap.h");
     let wrap_ioctl_path_str = wrap_ioctl_path.to_str().expect("Failed to convert header path to String");
 
     // ScoutFS is kernel code and does not provide libs; Need a user library wrapper for the ioctl

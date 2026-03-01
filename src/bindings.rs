@@ -15611,6 +15611,12 @@ unsafe extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 unsafe extern "C" {
+    pub fn wrap_ino_path_get_str(
+        root_fd: ::std::os::raw::c_int,
+        path: *mut scoutfs_ioctl_ino_path,
+    ) -> *mut ::std::os::raw::c_char;
+}
+unsafe extern "C" {
     pub fn wrap_listxattr_hidden(
         root_fd: ::std::os::raw::c_int,
         existing_attrs: *mut scoutfs_ioctl_listxattr_hidden,

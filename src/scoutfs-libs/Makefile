@@ -1,2 +1,5 @@
 libscoutwrap.a:
-	gcc -I/home/benja/scoutfs/ -c wrap-scoutfs-ioctl.c -o libscoutwrap.a
+	gcc -I/home/benja/scoutfs/ -fPIC -c scoutwrap.c -o libscoutwrap.a
+
+clean:
+	rm libscoutwrap.a
