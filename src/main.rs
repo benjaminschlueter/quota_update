@@ -4,11 +4,24 @@ mod scoutwrap;
 use scoutwrap::*; 
 
 use std::fs::OpenOptions;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
+use std::path::Path;
+use std::ffi::{c_char, c_void, CString};
+use std::io::Error;
+
+use nix::fcntl::OFlag;
+use nix::sys::stat::{Mode, SFlag};
+use nix::sys::stat::fstat;
 
 const BATCH_SIZE: usize = 3;
 const FS_ROOT_PATH: &str = "/marfs/mdal-root2";
 
 fn main() {
+
+    // abort if not root
+    if users::get_current_uid() != 0 {
+        panic!("Must run as root!");
+    }
 
     // open root_fd
     
@@ -103,11 +116,49 @@ fn main() {
                 Ok(p) => path = p.path,
                 Err(e) => {
                     println!("scoutwrap_path_ino: {}", e);
+                    println!("skipping this file...");
                     continue;
                 }
             }    
 
-            // println!("{:?}", path);
+            // open fd for path 
+            let fd;
+            match nix::fcntl::openat(fs_root.as_fd(), Path::new(&path), OFlag::empty(), Mode::from_bits_truncate(S_IRWXU)) {
+                Ok(f) => fd = f,
+                Err(e) => {
+                    println!("openat: {} at {}", e, path);
+                    println!("skipping this file...");
+                    continue;
+                }
+            }
+
+            let stat_struct;
+            match fstat(&fd) {
+                Ok(s) => stat_struct = s,
+                Err(e) => {
+                    println!("fstat: {} at {}", e, path);
+                    println!("skipping this file...");
+                    continue;
+                }
+            }
+            
+            // skip directories
+            if !SFlag::from_bits_truncate(stat_struct.st_mode).contains(SFlag::S_IFDIR) {
+                println!("{path}");
+
+                let mut marfs_xattr = String::new();
+                match wrap_libc_fgetxattr(fd.as_fd()) {
+                    Ok(x) => marfs_xattr = x,
+                    Err(e) => {
+                        println!("{e}");
+                        continue;
+                    }
+                }
+
+                println!("{marfs_xattr}");
+            }
+
+            
         }
 
         if last_batch {
@@ -115,4 +166,24 @@ fn main() {
         }
        
     }
+}
+
+// using libc fgetxattr to operations similar to
+fn wrap_libc_fgetxattr(fd: BorrowedFd) -> Result<String, String> {
+
+    unsafe {
+        let value_str;
+        let mut value_str_buf = libc::calloc(1, STR_BUF_SIZE); 
+    
+        if fgetxattr(fd.as_raw_fd(), CString::new("user.MDAL_MARFS-FILE").expect("bad path").as_ptr() as *const c_char, value_str_buf, STR_BUF_SIZE) == -1 {
+            return Err(std::io::Error::last_os_error().to_string());
+        } 
+
+        match CString::into_string(CString::from_raw(value_str_buf as *mut i8)) {
+            Ok(s) => value_str = s,
+            Err(e) => return Err(e.to_string()),
+        }
+        Ok(value_str)
+    }
+
 }

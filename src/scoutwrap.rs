@@ -3,13 +3,7 @@ use quota_update::*;
 use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::mem;
-use std::alloc;
-use std::alloc::Layout;
-use std::ptr;
-use std::io;
 use std::ffi::CStr;
-use libc::calloc;
-use libc::c_void;
 
 pub const STR_BUF_SIZE: usize = 512;
 
@@ -156,7 +150,7 @@ pub fn scoutwrap_ino_path(root_fs: &File, mut path_arg: ScoutwrapInoPath) -> Res
         }
     }
 
-    let ret_str = String::from("");
+    let ret_str;
     unsafe {
         /*
         let result = ptr::read(path_c.result_ptr as *const scoutfs_ioctl_ino_path_result);
@@ -168,7 +162,7 @@ pub fn scoutwrap_ino_path(root_fs: &File, mut path_arg: ScoutwrapInoPath) -> Res
         let slice: &[u8] = std::slice::from_raw_parts(path_ptr, 1);
 
 
-        println!("{:?}", CStr::from_ptr(slice.as_ptr() as *const i8));
+        ret_str = CStr::from_ptr(slice.as_ptr() as *const i8).to_str().unwrap().to_owned();
     }
 
     let ret_struct = ScoutwrapInoPathResult {
