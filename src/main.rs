@@ -6,7 +6,7 @@ use scoutwrap::*;
 use std::fs::OpenOptions;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::path::Path;
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::{c_char, c_void, CString, CStr};
 use std::io::Error;
 
 use nix::fcntl::{OFlag, AtFlags};
@@ -168,7 +168,7 @@ fn main() {
 
                 // get info from ftag
                 let ftag;
-                match get_ftag(marfs_xattr) {
+                match get_ftag(&marfs_xattr) {
                     Ok(f) => ftag = f,
                     Err(e) => {
                         println!("get_ftag: {e}");
@@ -199,9 +199,12 @@ fn main() {
                 
                 // get namespace root dir inode for xattr name
                 let mut ns_path = String::new();
-                match ns_path_from_streamid(ftag) {
+                match ns_path_from_streamid(&ftag) {
                     Ok(s) => ns_path = s,
-                    Err(e) => println!("ns_path_from_streamid: {e}"),
+                    Err(e) => {
+                        println!("ns_path_from_streamid: {e}");
+                        continue;
+                    }
                 }
                 
                 if VERBOSE {
@@ -222,15 +225,54 @@ fn main() {
                 let int2 = 0; // repo num
                 let int3 = ns_stat_struct.st_ino;
 
-                let attr_name = format!("scoutfs.hide.totl.acct.{}.{}.{}", int1, int2, int3);
+                let xattr_name = format!("scoutfs.hide.totl.acct.{}.{}.{}", int1, int2, int3);
 
                 if VERBOSE {
-                    println!("xattr name: {attr_name}");
+                    println!("xattr name: {xattr_name}");
                 }
 
-            }
+                let file_mode;
+                match get_marfs_file_mode(&marfs_xattr) {
+                    Ok(m) => file_mode = m,
+                    Err(e) => {
+                        println!("get_marfs_file_mode: {e}");
+                        continue;
+                    }
+                }
 
-            
+                if VERBOSE {
+                    println!("{}", file_mode)
+                }
+
+                // if files are complete, have link count 2 and no xattr: add to quota
+                if (!xattr_exists_bool && file_mode == "COMP" && stat_struct.st_nlink == 2) {
+                    
+                    if let Err(e) = wrap_libc_fsetxattr(fd.as_fd(), xattr_name, ftag.bytes.to_string(), ftag.bytes.to_string().len()) {
+                        println!("{e}");
+                        continue;
+                    }
+                    
+                    if VERBOSE {
+                        println!("Namespace {ns_path} Quota + {}", ftag.bytes);
+                    }
+                }
+                // files that have an xattr but are user deleted: subtract from quota
+                else if (xattr_exists_bool && stat_struct.st_nlink < 2) {
+                    if let Err(e) = wrap_libc_fremovexattr(fd.as_fd(), xattr_name) {
+                        println!("{e}");
+                        continue;
+                    }
+
+                    if VERBOSE {
+                        println!("Namespace {ns_path} Quota - {}", ftag.bytes);
+                    }
+                }
+                else {
+                    if VERBOSE {
+                        println!("no action taken");
+                    }
+                }
+            }
         }
 
         if last_batch {
@@ -257,10 +299,32 @@ fn wrap_libc_fgetxattr(fd: BorrowedFd) -> Result<String, String> {
         }
         Ok(value_str)
     }
-
 }
 
-fn get_ftag(marfs_xattr: String) -> Result<FTAG, String>{
+// using libc fgetxattr to operations similar to
+fn wrap_libc_fsetxattr(fd: BorrowedFd, name: String, value: String, length: usize) -> Result<(), String> {
+
+    unsafe {
+        if fsetxattr(fd.as_raw_fd(), CString::new(name).expect("bad name string").as_ptr() as *const c_char, CString::new(value).expect("bad value string").as_ptr() as *const c_void, length, 0) == -1 {
+            return Err(std::io::Error::last_os_error().to_string());
+        } 
+    }
+
+    Ok(())
+}
+
+fn wrap_libc_fremovexattr(fd: BorrowedFd, name: String) -> Result<(), String> {
+
+    unsafe {
+        if fremovexattr(fd.as_raw_fd(), CString::new(name).expect("bad name string").as_ptr() as *const c_char) == -1 {
+            return Err(std::io::Error::last_os_error().to_string());
+        } 
+    }
+
+    Ok(())
+}
+
+fn get_ftag(marfs_xattr: &str) -> Result<FTAG, String>{
     
     unsafe { 
         let ftag_buf = libc::calloc(1, std::mem::size_of::<FTAG>());
@@ -276,20 +340,19 @@ fn get_ftag(marfs_xattr: String) -> Result<FTAG, String>{
     }
 }
 
-fn ns_path_from_streamid(ftag: FTAG) -> Result<String, String> {
+fn ns_path_from_streamid(ftag: &FTAG) -> Result<String, String> {
 
     // convert streamid to Rust string
     let streamid_rust_str;
+
     unsafe {
-        match CString::into_string(CString::from_raw(ftag.streamid as *mut i8)) {
-            Ok(s) => streamid_rust_str = s,
-            Err(e) => return Err(e.to_string()),
-        }
+        streamid_rust_str = CStr::from_ptr(ftag.streamid).to_string_lossy().into_owned();
     }
 
     let vec1: Vec<String> = streamid_rust_str.split("##").map(|s| s.to_string()).collect();
     
     if vec1.len() != 2 {
+        
         return Err(String::from("incorrect vec1 length during streamid parsing"))
     }
 
@@ -306,4 +369,17 @@ fn ns_path_from_streamid(ftag: FTAG) -> Result<String, String> {
     }
 
     return Ok(ns_path)
+}
+
+fn get_marfs_file_mode(marfs_xattr: &str) -> Result<String, String> {
+
+    if marfs_xattr.contains("INIT") {
+        return Ok(String::from("INIT"));
+    }
+    else if marfs_xattr.contains("COMP") {
+        return Ok(String::from("COMP"));
+    }
+    else {
+        return Ok(String::new());
+    }
 }
