@@ -106,16 +106,14 @@ fn main() {
     //let log_string = format!("Wrote bindings from {header_path_str} to {bindings_path}\n"); 
     //log_file.write_all(log_string.as_bytes()).expect("Failed to write to build.log");
 
-
-
-    println!("cargo:rustc-link-search={}", libdir_path.to_str().unwrap());
-    println!("cargo:rustc-env=LD_LIBRARY_PATH={}", libdir_path.to_str().unwrap());
+    let marfs_lib_path = top_path.join("src/marfs/src/api/.libs");
+    let scoutfs_lib_path = top_path.join("src/scoutfs-libs");
+    
+    println!("cargo:rustc-link-arg=-Wl,-rpath,{}", marfs_lib_path.to_str().unwrap());
+    println!("cargo:rustc-link-search={}", marfs_lib_path.to_str().unwrap());
+    println!("cargo:rustc-link-search={}", scoutfs_lib_path.to_str().unwrap());
+    println!("cargo:rustc-env=LD_LIBRARY_PATH={}:{}", marfs_lib_path.to_str().unwrap(), scoutfs_lib_path.to_str().unwrap());
     println!("cargo:rustc-link-lib=marfs");
-    
-    let libdir_path = top_path.join("src/scoutfs-libs");
-    
-    println!("cargo:rustc-link-search={}", libdir_path.to_str().unwrap());
-    println!("cargo:rustc-env=LD_LIBRARY_PATH={}", libdir_path.to_str().unwrap());
     println!("cargo:rustc-link-lib=scoutwrap");
 
 }

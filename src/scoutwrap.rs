@@ -4,6 +4,7 @@ use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::mem;
 use std::ffi::CStr;
+use std::os::fd::BorrowedFd;
 
 pub const STR_BUF_SIZE: usize = 512;
 
@@ -174,11 +175,47 @@ pub fn scoutwrap_ino_path(root_fs: &File, mut path_arg: ScoutwrapInoPath) -> Res
     return Ok(ret_struct)
 }
 
+#[derive(Debug, Clone)]
+pub struct ScoutwrapListxattrHidden {
+    pub id_pos: u64,
+    pub xattr_list: Vec<String>,
+    pub buf_bytes: usize,
+    pub hash_pos: u32,
+}
 
+pub fn scoutwrap_listxattr_hidden(fs_root: &File, mut xattr_arg: ScoutwrapListxattrHidden) -> Result<ScoutwrapListxattrHidden, String> {
+    Ok(xattr_arg)
+}
 
+// fd: file descriptor for file being queried
+pub fn scoutwrap_check_xattr_exists(fd: BorrowedFd, mut xattr_arg: ScoutwrapListxattrHidden) -> Result<bool, String> {
+    
+    unsafe {
 
+        let buf = libc::calloc(1, STR_BUF_SIZE);
 
+        let mut existing_xattrs = scoutfs_ioctl_listxattr_hidden {
+                id_pos: xattr_arg.id_pos,
+                buf_ptr: buf as u64,
+                buf_bytes: STR_BUF_SIZE as u32,
+                hash_pos: xattr_arg.hash_pos,
+        };
 
+        if wrap_listxattr_hidden(fd.as_raw_fd(), &mut existing_xattrs) == -1 {
+            return Err(String::from("wrap_listxattr_hidden failed"));
+        }
+
+        // to find out if xattrs exist, examine the first byte checking if it is 0 or set
+        let first_byte: u8 = *(existing_xattrs.buf_ptr as *mut u8);
+
+        if first_byte == 0 {
+            return Ok(false);
+        }
+        else {
+            return Ok(true);
+        }
+    }
+}
 
 
 

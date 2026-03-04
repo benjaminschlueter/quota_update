@@ -32,6 +32,8 @@ char* wrap_ino_path_get_str(int root_fd, struct scoutfs_ioctl_ino_path *path) {
 	return ((struct scoutfs_ioctl_ino_path_result *) path->result_ptr)->path;
 	
 }
+
+
 // LISTXATTR_HIDDEN
 int wrap_listxattr_hidden(int root_fd, struct scoutfs_ioctl_listxattr_hidden *existing_attrs) {
 	return ioctl(root_fd, SCOUTFS_IOC_LISTXATTR_HIDDEN, existing_attrs); // access errno from Rust
