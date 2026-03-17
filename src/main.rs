@@ -7,17 +7,22 @@ use std::fs::OpenOptions;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::path::Path;
 use std::ffi::{c_char, c_void, CString, CStr};
-use std::io::Error;
+use std::io::{Error, ErrorKind};
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Read, Write};
 
 use nix::fcntl::{OFlag, AtFlags};
 use nix::sys::stat::{Mode, SFlag};
 use nix::sys::stat::fstat;
 use nix::sys::stat::fstatat;
 
-const VERBOSE: bool = true;
+const STARTUP_VERBOSE: bool = true;
+const LOOP_VERBOSE: bool = false;
 const QUOTA_MAGIC_NUM: u32 = 123;
 const BATCH_SIZE: usize = 3;
 const FS_ROOT_PATH: &str = "/marfs/mdal-root2";
+const MAJOR_FILE: &str = ".major";
+const NEW_MAJOR_FILE: &str = ".major.new";
 
 fn main() {
 
@@ -26,19 +31,79 @@ fn main() {
         panic!("Must run as root!");
     }
 
-    // open root_fd
+    let mut starting_major: i32;
+
+    // read state from major file 
+    let major_file_res = OpenOptions::new()
+                        .read(true)
+                        .open(MAJOR_FILE);
+
+    // if major file does not exist, create it and start from 0. On all other errors, panic. 
+    match major_file_res {
+        Ok(f) => {
+            let mut reader = BufReader::new(&f);
+            let mut starting_major_str = String::new();
+
+            reader.read_to_string(&mut starting_major_str);
+
+            starting_major = starting_major_str.trim().parse().expect("start major file does not contain valid integer");
+
+            drop(f); // needs to close before rename at end of execution
+        }
+        Err(e) => {
+            if e.kind() == ErrorKind::NotFound {
+                if STARTUP_VERBOSE {
+                    println!("No major file found: starting at major 0");
+                }
+
+                starting_major = 0;
+            }
+            else {
+                panic!("open: {}\nFailed to open major file", e.to_string());
+            }
+        }
+    }
+    
+    // check for existing NEW_MAJOR_FILE 
+    let major_file_new_res = OpenOptions::new()
+                         .read(true)
+                         .open(NEW_MAJOR_FILE);
+
+    match major_file_new_res {
+        Ok(f) => {
+            if STARTUP_VERBOSE {
+                println!("Reading starting_major from found major swap file")
+            }
+
+            let mut reader = BufReader::new(&f);
+            let mut starting_major_str = String::new();
+
+            reader.read_to_string(&mut starting_major_str);
+
+            starting_major = starting_major_str.trim().parse().expect("start major file does not contain valid integer");
+
+            drop(f); // needs to close before rename at end of execution
+        }
+        Err(e) => {
+            if e.kind() != ErrorKind::NotFound {
+                panic!("open: {}\nFailed to open major swap file", e.to_string());
+            }
+        }
+    }
+
+    // open fd for filesystem root
     
     let fs_root = OpenOptions::new().read(true).open(FS_ROOT_PATH);
     if let Err(e) = fs_root {
-        println!("open: {}", e);
-        panic!("failed to open filesystem root");
+        panic!("open: {}\nFailed to open filesystem root at {}", e, FS_ROOT_PATH);
     }
+
     let fs_root = fs_root.unwrap();
 
     // setup walk_inodes struct
     
     let first = ScoutwrapWalkInodesEntry {
-        major: 0,
+        major: starting_major as u64,
         ino: 0,
         minor: 0 ,  
     }; 
@@ -54,9 +119,14 @@ fn main() {
         last: last,
         entries_vec: Vec::new(),
         nr_entries: BATCH_SIZE,
-        //index: SCOUTFS_IOC_WALK_INODES_META_SEQ,
         index: 0,
     };
+
+    let mut ns_inode_cache = HashMap::new();
+
+    let mut final_major = 0;
+
+    println!("Running quota_update with starting major {}", starting_major);
 
     // process batches until entries vector is empty
     loop {
@@ -66,9 +136,7 @@ fn main() {
         match user_res {
             Ok(u) => user = u,
             Err(e) => {
-                println!("scoutwrap_walk_inodes: {}", e);
-                println!("skipping this batch");
-                continue;
+                panic!("scoutwrap_walk_inodes: {}", e);
             }
         }
 
@@ -79,10 +147,6 @@ fn main() {
             last_batch = true;
         }
 
-        let mut major = 0; // will never not be updated to a non-zero major
-        let mut ino = 0;
-        let mut minor = 0;
-        
         // process all but last element: last will be starting point of next run
         for entry in &user.entries_vec {
             
@@ -94,10 +158,9 @@ fn main() {
                 break;
             }
 
-            major = entry.major;
-            ino = entry.ino;
-            minor = entry.minor;
-
+            let major = entry.major;
+            let ino = entry.ino;
+            let minor = entry.minor;
             
             // skip inode 1 (root directory)
             if ino == 1 {
@@ -114,13 +177,17 @@ fn main() {
 
             // path ioctl
             let path_res = scoutwrap_ino_path(&fs_root, path_struct.clone()); 
-            let path;
+            let mut path = String::new();
             match path_res {
                 Ok(p) => path = p.path,
                 Err(e) => {
-                    println!("scoutwrap_path_ino: {}", e);
-                    println!("skipping this file...");
-                    continue;
+                    if std::io::Error::last_os_error().kind() == ErrorKind::NotFound {
+                        // handle a case where a deleted files inode will still show up in the changelog
+                        println!("WARNING: INO_PATH returned ENOENT. Skipping this entry.")
+                    }
+                    else {
+                        panic!("scoutwrap_ino_path: {} on inode {}", e, ino);
+                    }
                 }
             }    
 
@@ -129,9 +196,7 @@ fn main() {
             match nix::fcntl::openat(fs_root.as_fd(), Path::new(&path), OFlag::empty(), Mode::from_bits_truncate(S_IRWXU)) {
                 Ok(f) => fd = f,
                 Err(e) => {
-                    println!("openat: {} at {}", e, path);
-                    println!("skipping this file...");
-                    continue;
+                    panic!("openat: {} at {}", e, path);
                 }
             }
 
@@ -139,16 +204,14 @@ fn main() {
             match fstat(&fd) {
                 Ok(s) => stat_struct = s,
                 Err(e) => {
-                    println!("fstat: {} at {}", e, path);
-                    println!("skipping this file...");
-                    continue;
+                    panic!("fstat: {} at {}", e, path);
                 }
             }
             
             // skip directories
             if !SFlag::from_bits_truncate(stat_struct.st_mode).contains(SFlag::S_IFDIR) {
                 
-                if VERBOSE {
+                if LOOP_VERBOSE {
                     println!("\npath: {path}");
                     println!("{:?}", entry);
                 }
@@ -157,12 +220,11 @@ fn main() {
                 match wrap_libc_fgetxattr(fd.as_fd()) {
                     Ok(x) => marfs_xattr = x,
                     Err(e) => {
-                        println!("fgetxattr: {e}"); // skip files with no MarFS xattr set
-                        continue;
+                        panic!("fgetxattr: {e} at {path}");
                     }
                 }
 
-                if VERBOSE {
+                if LOOP_VERBOSE {
                     println!("{marfs_xattr}");
                 }
 
@@ -171,8 +233,7 @@ fn main() {
                 match get_ftag(&marfs_xattr) {
                     Ok(f) => ftag = f,
                     Err(e) => {
-                        println!("get_ftag: {e}");
-                        continue;
+                        panic!("get_ftag: {e} at {path}");
                     }
                 }
 
@@ -188,12 +249,12 @@ fn main() {
                 match scoutwrap_check_xattr_exists(fd.as_fd(), existing_xattrs) {
                     Ok(b) => xattr_exists_bool = b,
                     Err(e) => {
-                        println!("scoutwrap_listxattr_hidden: {e} at {path}");
+                        panic!("scoutwrap_listxattr_hidden: {e} at {path}");
                         continue;
                     }
                 }
                 
-                if VERBOSE {
+                if LOOP_VERBOSE {
                     println!("detected existing xattr: {:?}", xattr_exists_bool);
                 }
                 
@@ -202,13 +263,13 @@ fn main() {
                 match ns_path_from_streamid(&ftag) {
                     Ok(s) => ns_path = s,
                     Err(e) => {
-                        println!("ns_path_from_streamid: {e}");
+                        panic!("ns_path_from_streamid: {e} at {path}");
                         continue;
                     }
                 }
                 
-                if VERBOSE {
-                    println!("namespace path: {ns_path}");
+                if LOOP_VERBOSE {
+                    println!("namespace path: {}", &ns_path);
                 }
 
                 // get namespace inode
@@ -216,18 +277,18 @@ fn main() {
                 match fstatat(fs_root.as_fd(), Path::new(&ns_path), AtFlags::empty()) {
                     Ok(s) => ns_stat_struct = s,
                     Err(e) => {
-                        println!("fstatat: {e} at {ns_path}");
+                        panic!("fstatat: {e} at {}", &ns_path);
                         continue;
                     }
                 }
-                
+
                 let int1 = QUOTA_MAGIC_NUM;
                 let int2 = 0; // repo num
                 let int3 = ns_stat_struct.st_ino;
 
                 let xattr_name = format!("scoutfs.hide.totl.acct.{}.{}.{}", int1, int2, int3);
 
-                if VERBOSE {
+                if LOOP_VERBOSE {
                     println!("xattr name: {xattr_name}");
                 }
 
@@ -235,44 +296,44 @@ fn main() {
                 match get_marfs_file_mode(&marfs_xattr) {
                     Ok(m) => file_mode = m,
                     Err(e) => {
-                        println!("get_marfs_file_mode: {e}");
+                        panic!("get_marfs_file_mode: {e}");
                         continue;
                     }
-                }
-
-                if VERBOSE {
-                    println!("{}", file_mode)
                 }
 
                 // if files are complete, have link count 2 and no xattr: add to quota
                 if (!xattr_exists_bool && file_mode == "COMP" && stat_struct.st_nlink == 2) {
                     
                     if let Err(e) = wrap_libc_fsetxattr(fd.as_fd(), xattr_name, ftag.bytes.to_string(), ftag.bytes.to_string().len()) {
-                        println!("{e}");
+                        panic!("wrap_libc_fsetxattr: {e} at {path}");
                         continue;
                     }
-                    
-                    if VERBOSE {
-                        println!("Namespace {ns_path} Quota + {}", ftag.bytes);
-                    }
+
+                    ns_inode_cache.insert(ns_stat_struct.st_ino, ns_path.clone());
+
+
+                    println!("Namespace {} Quota + {}", &ns_path, ftag.bytes);
+
                 }
                 // files that have an xattr but are user deleted: subtract from quota
                 else if (xattr_exists_bool && stat_struct.st_nlink < 2) {
                     if let Err(e) = wrap_libc_fremovexattr(fd.as_fd(), xattr_name) {
-                        println!("{e}");
-                        continue;
+                        panic!("wrap_libc_fremovexattr: {e} at {path}");
                     }
 
-                    if VERBOSE {
-                        println!("Namespace {ns_path} Quota - {}", ftag.bytes);
-                    }
+                    ns_inode_cache.insert(ns_stat_struct.st_ino, ns_path.clone());
+
+                    println!("Namespace {} Quota - {}", &ns_path, ftag.bytes);
+                    
                 }
                 else {
-                    if VERBOSE {
-                        println!("no action taken");
+                    if LOOP_VERBOSE {
+                        println!("no quota change");
                     }
                 }
             }
+
+            final_major = major;
         }
 
         if last_batch {
@@ -280,6 +341,22 @@ fn main() {
         }
        
     }
+
+    // update major file with final major
+    if final_major != starting_major as u64 && final_major != 0 {
+        let mut new_major_file = OpenOptions::new()
+                                .write(true)
+                                .create(true)
+                                .open(NEW_MAJOR_FILE)
+                                .expect("failed to open temporary major storage file");
+
+        new_major_file.write_all(final_major.to_string().as_bytes());
+
+        std::fs::rename(NEW_MAJOR_FILE, MAJOR_FILE);
+        
+    }
+
+    println!("Finished quota_update at final major {}", final_major)
 }
 
 // using libc fgetxattr to operations similar to

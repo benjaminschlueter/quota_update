@@ -64,7 +64,7 @@ pub fn scoutwrap_walk_inodes(root_fs: &File, mut user_arg: ScoutwrapWalkInodes) 
     unsafe {
         entries_ptr = libc::calloc(user_arg.nr_entries as usize, std::mem::size_of::<scoutfs_ioctl_walk_inodes_entry>());
         if entries_ptr.is_null() {
-            return Err(String::from("calloc returned -1"));
+            return Err(String::from("calloc: ") + &std::io::Error::last_os_error().to_string());
         }
     }
 
@@ -81,7 +81,7 @@ pub fn scoutwrap_walk_inodes(root_fs: &File, mut user_arg: ScoutwrapWalkInodes) 
     let entries_c; 
     unsafe {
         if wrap_walk_inodes(root_fs.as_raw_fd(), &mut user) == -1 {
-            return Err(String::from("wrap_walk_inodes failed"));
+            return Err(std::io::Error::last_os_error().to_string());
         }
 
         // takes ownership of the calloc buffer and will drop it
@@ -147,7 +147,7 @@ pub fn scoutwrap_ino_path(root_fs: &File, mut path_arg: ScoutwrapInoPath) -> Res
     
     unsafe {
         if wrap_ino_path(root_fs.as_raw_fd(), &mut path_c) == -1 {
-            return Err(String::from("wrap_walk_inodes failed"));
+            return Err(std::io::Error::last_os_error().to_string());
         }
     }
 
@@ -202,7 +202,7 @@ pub fn scoutwrap_check_xattr_exists(fd: BorrowedFd, mut xattr_arg: ScoutwrapList
         };
 
         if wrap_listxattr_hidden(fd.as_raw_fd(), &mut existing_xattrs) == -1 {
-            return Err(String::from("wrap_listxattr_hidden failed"));
+            return Err(std::io::Error::last_os_error().to_string());
         }
 
         // to find out if xattrs exist, examine the first byte checking if it is 0 or set
