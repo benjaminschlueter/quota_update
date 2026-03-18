@@ -22,9 +22,9 @@ const LOOP_VERBOSE: bool = true;
 const QUOTA_MAGIC_NUM: u32 = 123;
 const BATCH_SIZE: usize = 3;
 const FS_ROOT_PATH: &str = "/marfs/mdal-root2";
-const MAJOR_FILE: &str = ".major";
-const NEW_MAJOR_FILE: &str = ".major.new";
-const CHECKPOINT_MS: u64 = 60000; // WARNING: will fail to update major file if this is too small
+const STATE_FILE: &str = ".state";
+const NEW_STATE_FILE: &str = ".state.new";
+const CHECKPOINT_MS: u64 = 60000; // WARNING: will fail to update state file if this is too small
 
 fn main() {
 
@@ -37,65 +37,65 @@ fn main() {
     let mut starting_ino: i32 = 0;
     let mut starting_minor: i32 = 0;
 
-    // read state from major file 
-    let major_file_res = OpenOptions::new()
+    // read state from state file 
+    let state_file_res = OpenOptions::new()
                         .read(true)
-                        .open(MAJOR_FILE);
+                        .open(STATE_FILE);
 
-    // if major file does not exist, create it and start from 0. On all other errors, panic. 
-    match major_file_res {
+    // if state file does not exist, create it and start from 0. On all other errors, panic. 
+    match state_file_res {
         Ok(f) => {
             let mut reader = BufReader::new(&f);
-            let mut starting_major_str = String::new();
+            let mut starting_state_str = String::new();
 
-            reader.read_to_string(&mut starting_major_str);
-            let input_vec: Vec<String> = starting_major_str.split("\n").map(|s| s.to_string()).collect();
+            reader.read_to_string(&mut starting_state_str);
+            let input_vec: Vec<String> = starting_state_str.split("\n").map(|s| s.to_string()).collect();
 
-            starting_major = input_vec[0].trim().parse().expect("start major file does not contain valid integer");
-            starting_ino = input_vec[1].trim().parse().expect("start major file does not contain valid integer");
-            starting_minor = input_vec[2].trim().parse().expect("start major file does not contain valid integer");
+            starting_major = input_vec[0].trim().parse().expect("state file does not contain valid integer");
+            starting_ino = input_vec[1].trim().parse().expect("state file does not contain valid integer");
+            starting_minor = input_vec[2].trim().parse().expect("state file does not contain valid integer");
 
             drop(f); // needs to close before rename at end of execution
         }
         Err(e) => {
             if e.kind() == ErrorKind::NotFound {
                 if STARTUP_VERBOSE {
-                    println!("No major file found: starting at major 0");
+                    println!("No state file found: starting at state 0");
                 }
             }
             else {
-                panic!("open: {}\nFailed to open major file", e.to_string());
+                panic!("open: {}\nFailed to open state file", e.to_string());
             }
         }
     }
     
-    // check for existing NEW_MAJOR_FILE 
-    let major_file_new_res = OpenOptions::new()
+    // check for existing NEW_STATE_FILE 
+    let state_file_new_res = OpenOptions::new()
                          .read(true)
-                         .open(NEW_MAJOR_FILE);
+                         .open(NEW_STATE_FILE);
 
-    match major_file_new_res {
+    match state_file_new_res {
         Ok(f) => {
             if STARTUP_VERBOSE {
-                println!("Reading starting_major from found major swap file")
+                println!("Reading starting_state from found state swap file")
             }
 
             let mut reader = BufReader::new(&f);
-            let mut starting_major_str = String::new();
+            let mut starting_state_str = String::new();
 
-            reader.read_to_string(&mut starting_major_str);
+            reader.read_to_string(&mut starting_state_str);
             
-            let input_vec: Vec<String> = starting_major_str.split("\n").map(|s| s.to_string()).collect();
+            let input_vec: Vec<String> = starting_state_str.split("\n").map(|s| s.to_string()).collect();
 
-            starting_major = input_vec[0].trim().parse().expect("start major file does not contain valid integer");
-            starting_ino = input_vec[1].trim().parse().expect("start major file does not contain valid integer");
-            starting_minor = input_vec[2].trim().parse().expect("start major file does not contain valid integer");
+            starting_major = input_vec[0].trim().parse().expect("state file does not contain valid integer");
+            starting_ino = input_vec[1].trim().parse().expect("state file does not contain valid integer");
+            starting_minor = input_vec[2].trim().parse().expect("state file does not contain valid integer");
 
             drop(f); // needs to close before rename at end of execution
         }
         Err(e) => {
             if e.kind() != ErrorKind::NotFound {
-                panic!("open: {}\nFailed to open major swap file", e.to_string());
+                panic!("open: {}\nFailed to open state swap file", e.to_string());
             }
         }
     }
@@ -137,7 +137,7 @@ fn main() {
     let mut final_ino = 0;
     let mut final_minor = 0;
 
-    println!("Running quota_update with starting major {}", starting_major);
+    println!("Running quota_update with starting state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
 
     let start_time = Instant::now();
     let mut last_checkpoint = Duration::from_millis(0);
@@ -175,6 +175,11 @@ fn main() {
             let major = entry.major;
             let ino = entry.ino;
             let minor = entry.minor;
+
+            // skip entry if it matches the starting values: it was processed in the last run
+            if major == starting_major as u64 && ino == starting_ino as u64 && minor == starting_minor as u32 {
+                continue;
+            }
             
             // skip inode 1 (root directory)
             if ino == 1 {
@@ -356,18 +361,18 @@ fn main() {
                 println!("checkpoint at {:?}", cur_time);
             }
 
-            // update major file with final major
+            // update state file with final state
             if final_major != starting_major as u64 && final_major != 0 {
-                let mut new_major_file = OpenOptions::new()
+                let mut new_state_file = OpenOptions::new()
                                         .write(true)
                                         .create(true)
-                                        .open(NEW_MAJOR_FILE)
-                                        .expect("failed to open temporary major storage file");
+                                        .open(NEW_STATE_FILE)
+                                        .expect("failed to open temporary state file");
                 
                 let write_str = format!("{}\n{}\n{}", final_major.to_string(), final_ino.to_string(), final_minor.to_string());
-                new_major_file.write_all(write_str.as_bytes());
+                new_state_file.write_all(write_str.as_bytes());
 
-                std::fs::rename(NEW_MAJOR_FILE, MAJOR_FILE);
+                std::fs::rename(NEW_STATE_FILE, STATE_FILE);
             }
 
             last_checkpoint = cur_time;
@@ -379,9 +384,13 @@ fn main() {
        
     }
 
-
-
-    println!("Finished quota_update at final major {}", final_major)
+    // if there is nothing to do, the finals won't be updated from 0. print startings instead to not confuse user
+    if final_major == 0 && final_ino == 0 && final_minor == 0 {
+        println!("Finished quota_update at final state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
+    }
+    else {
+        println!("Finished quota_update at final state (major: {}, ino: {}, minor: {})", final_major, final_ino, final_minor);
+    }
 }
 
 // using libc fgetxattr to operations similar to
