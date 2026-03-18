@@ -10,6 +10,7 @@ use std::ffi::{c_char, c_void, CString, CStr};
 use std::io::{Error, ErrorKind};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::time::{Instant, Duration};
 
 use nix::fcntl::{OFlag, AtFlags};
 use nix::sys::stat::{Mode, SFlag};
@@ -17,12 +18,13 @@ use nix::sys::stat::fstat;
 use nix::sys::stat::fstatat;
 
 const STARTUP_VERBOSE: bool = true;
-const LOOP_VERBOSE: bool = false;
+const LOOP_VERBOSE: bool = true;
 const QUOTA_MAGIC_NUM: u32 = 123;
 const BATCH_SIZE: usize = 3;
 const FS_ROOT_PATH: &str = "/marfs/mdal-root2";
 const MAJOR_FILE: &str = ".major";
 const NEW_MAJOR_FILE: &str = ".major.new";
+const CHECKPOINT_MS: u64 = 60000; // WARNING: will fail to update major file if this is too small
 
 fn main() {
 
@@ -31,7 +33,9 @@ fn main() {
         panic!("Must run as root!");
     }
 
-    let mut starting_major: i32;
+    let mut starting_major: i32 = 0;
+    let mut starting_ino: i32 = 0;
+    let mut starting_minor: i32 = 0;
 
     // read state from major file 
     let major_file_res = OpenOptions::new()
@@ -45,8 +49,11 @@ fn main() {
             let mut starting_major_str = String::new();
 
             reader.read_to_string(&mut starting_major_str);
+            let input_vec: Vec<String> = starting_major_str.split("\n").map(|s| s.to_string()).collect();
 
-            starting_major = starting_major_str.trim().parse().expect("start major file does not contain valid integer");
+            starting_major = input_vec[0].trim().parse().expect("start major file does not contain valid integer");
+            starting_ino = input_vec[1].trim().parse().expect("start major file does not contain valid integer");
+            starting_minor = input_vec[2].trim().parse().expect("start major file does not contain valid integer");
 
             drop(f); // needs to close before rename at end of execution
         }
@@ -55,8 +62,6 @@ fn main() {
                 if STARTUP_VERBOSE {
                     println!("No major file found: starting at major 0");
                 }
-
-                starting_major = 0;
             }
             else {
                 panic!("open: {}\nFailed to open major file", e.to_string());
@@ -79,8 +84,12 @@ fn main() {
             let mut starting_major_str = String::new();
 
             reader.read_to_string(&mut starting_major_str);
+            
+            let input_vec: Vec<String> = starting_major_str.split("\n").map(|s| s.to_string()).collect();
 
-            starting_major = starting_major_str.trim().parse().expect("start major file does not contain valid integer");
+            starting_major = input_vec[0].trim().parse().expect("start major file does not contain valid integer");
+            starting_ino = input_vec[1].trim().parse().expect("start major file does not contain valid integer");
+            starting_minor = input_vec[2].trim().parse().expect("start major file does not contain valid integer");
 
             drop(f); // needs to close before rename at end of execution
         }
@@ -104,8 +113,8 @@ fn main() {
     
     let first = ScoutwrapWalkInodesEntry {
         major: starting_major as u64,
-        ino: 0,
-        minor: 0 ,  
+        ino: starting_ino as u64,
+        minor: starting_minor as u32,  
     }; 
 
     let last = ScoutwrapWalkInodesEntry {
@@ -125,8 +134,13 @@ fn main() {
     let mut ns_inode_cache = HashMap::new();
 
     let mut final_major = 0;
+    let mut final_ino = 0;
+    let mut final_minor = 0;
 
     println!("Running quota_update with starting major {}", starting_major);
+
+    let start_time = Instant::now();
+    let mut last_checkpoint = Duration::from_millis(0);
 
     // process batches until entries vector is empty
     loop {
@@ -250,7 +264,6 @@ fn main() {
                     Ok(b) => xattr_exists_bool = b,
                     Err(e) => {
                         panic!("scoutwrap_listxattr_hidden: {e} at {path}");
-                        continue;
                     }
                 }
                 
@@ -264,7 +277,6 @@ fn main() {
                     Ok(s) => ns_path = s,
                     Err(e) => {
                         panic!("ns_path_from_streamid: {e} at {path}");
-                        continue;
                     }
                 }
                 
@@ -278,7 +290,6 @@ fn main() {
                     Ok(s) => ns_stat_struct = s,
                     Err(e) => {
                         panic!("fstatat: {e} at {}", &ns_path);
-                        continue;
                     }
                 }
 
@@ -297,7 +308,6 @@ fn main() {
                     Ok(m) => file_mode = m,
                     Err(e) => {
                         panic!("get_marfs_file_mode: {e}");
-                        continue;
                     }
                 }
 
@@ -306,7 +316,6 @@ fn main() {
                     
                     if let Err(e) = wrap_libc_fsetxattr(fd.as_fd(), xattr_name, ftag.bytes.to_string(), ftag.bytes.to_string().len()) {
                         panic!("wrap_libc_fsetxattr: {e} at {path}");
-                        continue;
                     }
 
                     ns_inode_cache.insert(ns_stat_struct.st_ino, ns_path.clone());
@@ -333,28 +342,44 @@ fn main() {
                 }
             }
 
+            // set final state to the last file processed. This means the last file will be processed again in the next run, but this tool is idempotent.
             final_major = major;
+            final_ino = ino;
+            final_minor = minor;
         }
 
+        let cur_time = start_time.elapsed();
+
+        // save state on last batch or every CHECKPOINT_MS
+        if last_batch || cur_time - last_checkpoint > Duration::from_millis(CHECKPOINT_MS) {
+            if LOOP_VERBOSE {
+                println!("checkpoint at {:?}", cur_time);
+            }
+
+            // update major file with final major
+            if final_major != starting_major as u64 && final_major != 0 {
+                let mut new_major_file = OpenOptions::new()
+                                        .write(true)
+                                        .create(true)
+                                        .open(NEW_MAJOR_FILE)
+                                        .expect("failed to open temporary major storage file");
+                
+                let write_str = format!("{}\n{}\n{}", final_major.to_string(), final_ino.to_string(), final_minor.to_string());
+                new_major_file.write_all(write_str.as_bytes());
+
+                std::fs::rename(NEW_MAJOR_FILE, MAJOR_FILE);
+            }
+
+            last_checkpoint = cur_time;
+        }
+        
         if last_batch {
             break;
         }
        
     }
 
-    // update major file with final major
-    if final_major != starting_major as u64 && final_major != 0 {
-        let mut new_major_file = OpenOptions::new()
-                                .write(true)
-                                .create(true)
-                                .open(NEW_MAJOR_FILE)
-                                .expect("failed to open temporary major storage file");
 
-        new_major_file.write_all(final_major.to_string().as_bytes());
-
-        std::fs::rename(NEW_MAJOR_FILE, MAJOR_FILE);
-        
-    }
 
     println!("Finished quota_update at final major {}", final_major)
 }
