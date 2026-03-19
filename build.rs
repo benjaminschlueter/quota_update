@@ -48,23 +48,12 @@ fn main() {
     log_file.write_all(b"\n").expect("Failed to write to build.log");
 
     // ScoutFS headers
-    
-    /*    
-    let header_path = PathBuf::from(String::from("/usr/include/linux/types.h"));
-    let header_path_str = header_path.to_str().expect("Failed to convert header path to String");
-    include_header(header_path_str, bindings_path, &mut log_file, top_path.to_str().unwrap()); 
-    */
-    
-    /*
-    let util_path = scoutfs_path.join("utils/src/util.h");
-    let util_path_str = util_path.to_str().expect("Failed to convert header path to String");
-    
-    let ioctl_path = scoutfs_path.join("kmod/src/ioctl.h");
-    let ioctl_path_str = ioctl_path.to_str().expect("Failed to convert header path to String");
-    */
 
-    let wrap_ioctl_path = top_path.join("src/scoutfs-libs/scoutwrap.h");
-    let wrap_ioctl_path_str = wrap_ioctl_path.to_str().expect("Failed to convert header path to String");
+    let scoutwrap_path = top_path.join("src/scoutfs-libs/scoutwrap.h");
+    let scoutwrap_path_str = scoutwrap_path.to_str().expect("Failed to convert header path to String");
+
+    let nswrap_path = top_path.join("src/marfs-libs/nswrap.h");
+    let nswrap_path_str = nswrap_path.to_str().expect("Failed to convert header path to String");
 
     // ScoutFS is kernel code and does not provide libs; Need a user library wrapper for the ioctl
     
@@ -79,7 +68,8 @@ fn main() {
                     .header(auto_config_path_str)
                     .header(config_path_str)
                     .header(tagging_path_str)
-                    .header(wrap_ioctl_path_str)
+                    .header(scoutwrap_path_str)
+                    .header(nswrap_path_str)
                     .clang_arg(format!("-I{}/src/marfs/src", top_path.to_str().unwrap()))
                     .clang_arg(format!("-I{}/src/scoutfs", top_path.to_str().unwrap()))
                     .clang_arg("-I/usr/include/libxml2")
@@ -107,14 +97,17 @@ fn main() {
     //log_file.write_all(log_string.as_bytes()).expect("Failed to write to build.log");
 
     let marfs_lib_path = top_path.join("src/marfs/src/api/.libs");
-    let scoutfs_lib_path = top_path.join("src/scoutfs-libs");
+    let scoutwrap_lib_path = top_path.join("src/scoutfs-libs");
+    let nswrap_lib_path = top_path.join("src/marfs-libs");
     
     println!("cargo:rustc-link-arg=-Wl,-rpath,{}", marfs_lib_path.to_str().unwrap());
     println!("cargo:rustc-link-search={}", marfs_lib_path.to_str().unwrap());
-    println!("cargo:rustc-link-search={}", scoutfs_lib_path.to_str().unwrap());
-    println!("cargo:rustc-env=LD_LIBRARY_PATH={}:{}", marfs_lib_path.to_str().unwrap(), scoutfs_lib_path.to_str().unwrap());
+    println!("cargo:rustc-link-search={}", scoutwrap_lib_path.to_str().unwrap());
+    println!("cargo:rustc-link-search={}", nswrap_lib_path.to_str().unwrap());
+    println!("cargo:rustc-env=LD_LIBRARY_PATH={}:{}:{}", marfs_lib_path.to_str().unwrap(), scoutwrap_lib_path.to_str().unwrap(), nswrap_lib_path.to_str().unwrap());
     println!("cargo:rustc-link-lib=marfs");
     println!("cargo:rustc-link-lib=scoutwrap");
+    println!("cargo:rustc-link-lib=nswrap");
 
 }
 
@@ -126,8 +119,6 @@ fn include_header(header_path: &str, bindings_path: &str, log_file: &mut File, t
                     .clang_arg(format!("-I{}/src/marfs/src", top_path))
                     .clang_arg(format!("-I{}/src/scoutfs", top_path))
                     .clang_arg("-I/usr/include/libxml2")
-                    //.clang_arg("-include")
-                    //.clang_arg("/usr/include/linux/types.h")
                     .generate()
                     .expect("Failed to generate bindings for {header_path_str");
     

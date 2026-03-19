@@ -1,1 +1,1 @@
-sudo ./target/debug/quota_update
+sudo MARFS_CONFIG_PATH=/opt/campaign/install/etc/marfs-config.xml ./target/debug/quota_update

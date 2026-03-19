@@ -1144,6 +1144,8 @@ pub const SCOUTFS_IOC_IAX_SIZE: u32 = 128;
 pub const SCOUTFS_IOC_IAX_RETENTION: u32 = 256;
 pub const SCOUTFS_IOC_IAX_PROJECT_ID: u32 = 512;
 pub const SCOUTFS_IOC_IAX__BITS: u32 = 256;
+pub const BUF_MAX_NS_COUNT: u32 = 4096;
+pub const STR_BUF_SIZE_C: u32 = 512;
 pub type wchar_t = ::std::os::raw::c_int;
 pub type _Float32 = f32;
 pub type _Float64 = f64;
@@ -15626,6 +15628,35 @@ unsafe extern "C" {
     pub fn wrap_read_xattr_totals(
         root_fd: ::std::os::raw::c_int,
         totals: *mut scoutfs_ioctl_read_xattr_totals,
+    ) -> ::std::os::raw::c_int;
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct nswrap_entry_c_ {
+    pub inode: ::std::os::raw::c_int,
+    pub path: *mut ::std::os::raw::c_char,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of nswrap_entry_c_"][::std::mem::size_of::<nswrap_entry_c_>() - 16usize];
+    ["Alignment of nswrap_entry_c_"][::std::mem::align_of::<nswrap_entry_c_>() - 8usize];
+    ["Offset of field: nswrap_entry_c_::inode"]
+        [::std::mem::offset_of!(nswrap_entry_c_, inode) - 0usize];
+    ["Offset of field: nswrap_entry_c_::path"]
+        [::std::mem::offset_of!(nswrap_entry_c_, path) - 8usize];
+};
+pub type nswrap_entry_c = nswrap_entry_c_;
+unsafe extern "C" {
+    pub fn nswrap_gen_list_c(
+        root_ns: *mut marfs_ns,
+        root_fd: ::std::os::raw::c_int,
+    ) -> *mut nswrap_entry_c;
+}
+unsafe extern "C" {
+    pub fn rec_fill_ns_buf(
+        ns: *mut marfs_ns,
+        nswrap_buf: *mut nswrap_entry_c,
+        xattr_totals_buf: *mut scoutfs_ioctl_xattr_total,
     ) -> ::std::os::raw::c_int;
 }
 pub type __builtin_va_list = [__va_list_tag; 1usize];

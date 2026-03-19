@@ -3,6 +3,9 @@ use quota_update::*;
 mod scoutwrap;
 use scoutwrap::*; 
 
+mod nswrap;
+use nswrap::*;
+
 use std::fs::OpenOptions;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::path::Path;
@@ -11,6 +14,9 @@ use std::io::{Error, ErrorKind};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::time::{Instant, Duration};
+use std::alloc::{alloc, Layout};
+use std::ptr;
+use std::env;
 
 use nix::fcntl::{OFlag, AtFlags};
 use nix::sys::stat::{Mode, SFlag};
@@ -25,6 +31,7 @@ const FS_ROOT_PATH: &str = "/marfs/mdal-root2";
 const STATE_FILE: &str = ".state";
 const NEW_STATE_FILE: &str = ".state.new";
 const CHECKPOINT_MS: u64 = 60000; // WARNING: will fail to update state file if this is too small
+const CONFIG_PATH: &str = "/opt/campaign/install/etc/marfs-config.xml";
 
 fn main() {
 
@@ -60,7 +67,7 @@ fn main() {
         Err(e) => {
             if e.kind() == ErrorKind::NotFound {
                 if STARTUP_VERBOSE {
-                    println!("No state file found: starting at state 0");
+                    println!("No state file found: starting at initial state 0");
                 }
             }
             else {
@@ -136,6 +143,14 @@ fn main() {
     let mut final_major = 0;
     let mut final_ino = 0;
     let mut final_minor = 0;
+
+    // MarFS config processing 
+
+    let config;
+    match wrap_config_init(CONFIG_PATH.to_string()) {
+        Ok(c) => config = c,
+        Err(e) => panic!("config_init: {}", e),
+    }
 
     println!("Running quota_update with starting state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
 
@@ -384,6 +399,13 @@ fn main() {
        
     }
 
+    // update MarFS quotas
+
+    match nswrap_gen_list(config.rootns, fs_root.as_fd()) {
+        Ok(l) => {}
+        Err(e) => panic!("{}", e),
+    }
+
     // if there is nothing to do, the finals won't be updated from 0. print startings instead to not confuse user
     if final_major == 0 && final_ino == 0 && final_minor == 0 {
         println!("Finished quota_update at final state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
@@ -492,5 +514,39 @@ fn get_marfs_file_mode(marfs_xattr: &str) -> Result<String, String> {
     }
     else {
         return Ok(String::new());
+    }
+}
+
+/*
+ * @param config_path: path of config to use or empty for env var MARFS_CONFIG_PATH
+ * @return marfs_config struct
+ */
+fn wrap_config_init(config_path: String) -> Result<marfs_config, String> {
+    
+    let layout = Layout::new::<pthread_mutex_t>();
+    let erasure_lock;
+    unsafe {
+        erasure_lock = alloc(layout) as *mut pthread_mutex_t; // allocate memory for pthread_mutex_t
+        pthread_mutex_init(erasure_lock, ptr::null());
+
+        let config;
+        if config_path.is_empty() {
+            config = config_init(CString::new(env::var("MARFS_CONFIG_PATH").expect("MARFS_CONFIG_PATH not set")).expect("bad MARFS_CONFIG_PATH string").as_ptr(), erasure_lock);
+        }
+        else {
+            config = config_init(CString::new(config_path).expect("bad config_path string").as_ptr(), erasure_lock);
+        }
+        
+        if config.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+
+        Ok(*config)
+    }
+}
+
+fn get_root_ns_string(root_ns: *mut marfs_ns) -> String{
+    unsafe { 
+        CStr::from_ptr((*root_ns).idstr as *const i8).to_str().expect("bad namespace id string").to_owned() 
     }
 }
