@@ -6,13 +6,10 @@
 
 #define BUF_MAX_NS_COUNT 4096
 #define STR_BUF_SIZE_C 512
+#define VERBOSE_C 1
 
-typedef struct nswrap_entry_c_ {
-    int inode;
-    char* path;
-} nswrap_entry_c;
 
-nswrap_entry_c* nswrap_gen_list_c(marfs_ns* root_ns, int root_fd);
+int nswrap_update_quota_c(marfs_ns* root_ns, int root_fd);
 
-int rec_fill_ns_buf(marfs_ns* ns, nswrap_entry_c* nswrap_buf, struct scoutfs_ioctl_xattr_total* xattr_totals_buf);
+int rec_ns_subspace_walk(marfs_ns* ns, struct scoutfs_ioctl_xattr_total* xattr_totals_buf);
 

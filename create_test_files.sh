@@ -1,5 +1,5 @@
 content="asdfjklasdfjlhafljdkhfkjasd"
 
-for i in {41..50}; do 
- echo $content > /campaign/full-access-subspace/file$i
+for i in {2..10}; do 
+ echo $content > /campaign/test1/file$i
 done

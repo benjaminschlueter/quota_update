@@ -24,7 +24,8 @@ use nix::sys::stat::fstat;
 use nix::sys::stat::fstatat;
 
 const STARTUP_VERBOSE: bool = true;
-const LOOP_VERBOSE: bool = true;
+const LOOP_VERBOSE: bool = false;
+const QUOTA_CHANGE_VERBOSE: bool = true;
 const QUOTA_MAGIC_NUM: u32 = 123;
 const BATCH_SIZE: usize = 3;
 const FS_ROOT_PATH: &str = "/marfs/mdal-root2";
@@ -32,6 +33,7 @@ const STATE_FILE: &str = ".state";
 const NEW_STATE_FILE: &str = ".state.new";
 const CHECKPOINT_MS: u64 = 60000; // WARNING: will fail to update state file if this is too small
 const CONFIG_PATH: &str = "/opt/campaign/install/etc/marfs-config.xml";
+const QUOTA_FILE_NAME: &str = "MDAL_datasize";
 
 fn main() {
 
@@ -99,6 +101,10 @@ fn main() {
             starting_minor = input_vec[2].trim().parse().expect("state file does not contain valid integer");
 
             drop(f); // needs to close before rename at end of execution
+
+            if let Err(e) = std::fs::remove_file(Path::new(NEW_STATE_FILE)) {
+                panic!("failed to remove NEW_STATE_FILE");
+            }
         }
         Err(e) => {
             if e.kind() != ErrorKind::NotFound {
@@ -225,6 +231,11 @@ fn main() {
                 }
             }    
 
+            // skip the quota file itself
+            if path.contains(QUOTA_FILE_NAME) {
+                continue;
+            }
+
             // open fd for path 
             let fd;
             match nix::fcntl::openat(fs_root.as_fd(), Path::new(&path), OFlag::empty(), Mode::from_bits_truncate(S_IRWXU)) {
@@ -254,7 +265,16 @@ fn main() {
                 match wrap_libc_fgetxattr(fd.as_fd()) {
                     Ok(x) => marfs_xattr = x,
                     Err(e) => {
-                        panic!("fgetxattr: {e} at {path}");
+                        if e.raw_os_error() == Some(libc::ENODATA) || e.raw_os_error() == Some(libc::ENOATTR) {
+                            if LOOP_VERBOSE {
+                                println!("MarFS xattr not found, skipping this file")
+                            }
+                            
+                            continue;
+                        }
+                        else {
+                            panic!("fgetxattr: {} at {}", e.to_string(), path);
+                        }
                     }
                 }
 
@@ -340,8 +360,9 @@ fn main() {
 
                     ns_inode_cache.insert(ns_stat_struct.st_ino, ns_path.clone());
 
-
-                    println!("Namespace {} Quota + {}", &ns_path, ftag.bytes);
+                    if QUOTA_CHANGE_VERBOSE {
+                        println!("Namespace {} Quota + {}", &ns_path, ftag.bytes);
+                    }
 
                 }
                 // files that have an xattr but are user deleted: subtract from quota
@@ -352,7 +373,9 @@ fn main() {
 
                     ns_inode_cache.insert(ns_stat_struct.st_ino, ns_path.clone());
 
-                    println!("Namespace {} Quota - {}", &ns_path, ftag.bytes);
+                    if QUOTA_CHANGE_VERBOSE {
+                        println!("Namespace {} Quota - {}", &ns_path, ftag.bytes);
+                    }
                     
                 }
                 else {
@@ -399,14 +422,17 @@ fn main() {
        
     }
 
-    // update MarFS quotas
+    if final_major == 0 && final_ino == 0 && final_minor == 0 {
+        println!("Finished quota_update at final state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
+    }
 
-    match nswrap_gen_list(config.rootns, fs_root.as_fd()) {
+    // update MarFS quotas
+    match nswrap_update_quota(config.rootns, fs_root.as_fd()) {
         Ok(l) => {}
         Err(e) => panic!("{}", e),
     }
 
-    // if there is nothing to do, the finals won't be updated from 0. print startings instead to not confuse user
+    // If there is nothing to do, the finals won't be updated from 0. print startings instead to not confuse user.
     if final_major == 0 && final_ino == 0 && final_minor == 0 {
         println!("Finished quota_update at final state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
     }
@@ -416,20 +442,17 @@ fn main() {
 }
 
 // using libc fgetxattr to operations similar to
-fn wrap_libc_fgetxattr(fd: BorrowedFd) -> Result<String, String> {
+fn wrap_libc_fgetxattr(fd: BorrowedFd) -> Result<String, std::io::Error> {
 
     unsafe {
-        let value_str;
         let mut value_str_buf = libc::calloc(1, STR_BUF_SIZE); 
     
         if fgetxattr(fd.as_raw_fd(), CString::new("user.MDAL_MARFS-FILE").expect("bad path").as_ptr() as *const c_char, value_str_buf, STR_BUF_SIZE) == -1 {
-            return Err(std::io::Error::last_os_error().to_string());
+            return Err(std::io::Error::last_os_error());
         } 
 
-        match CString::into_string(CString::from_raw(value_str_buf as *mut i8)) {
-            Ok(s) => value_str = s,
-            Err(e) => return Err(e.to_string()),
-        }
+        let value_str = CStr::from_ptr(value_str_buf as *const i8).to_str().expect("bad value string").to_owned();
+
         Ok(value_str)
     }
 }
