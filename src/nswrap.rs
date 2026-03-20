@@ -8,9 +8,7 @@ use std::ffi::CStr;
 
 pub fn nswrap_update_quota(root_ns_arg: *mut marfs_ns, root_fd: BorrowedFd) -> Result<(), String> {
 
-    let root_ns;
     unsafe {
-        root_ns = *root_ns_arg;
 
         // return a buffer to be parsed into a vector of nswrap_entry structs
         if nswrap_update_quota_c(root_ns_arg, root_fd.as_raw_fd()) == -1 {
@@ -25,9 +23,7 @@ pub fn nswrap_build_map(root_ns_arg: *mut marfs_ns) -> Result<HashMap<String, u6
     
     let mut map: HashMap<String, u64> = HashMap::new();
 
-    let root_ns;
     unsafe {
-        root_ns = *root_ns_arg;
 
         let map_buf_raw = nswrap_build_map_c(root_ns_arg);
 

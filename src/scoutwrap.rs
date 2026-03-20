@@ -2,7 +2,6 @@ use quota_update::*;
 
 use std::fs::File;
 use std::os::fd::AsRawFd;
-use std::mem;
 use std::ffi::CStr;
 use std::os::fd::BorrowedFd;
 
@@ -129,7 +128,7 @@ pub struct ScoutwrapInoPathResult {
     pub path: String,
 }
 
-pub fn scoutwrap_ino_path(root_fs: &File, mut path_arg: ScoutwrapInoPath) -> Result<ScoutwrapInoPathResult, String> {
+pub fn scoutwrap_ino_path(root_fs: &File, path_arg: ScoutwrapInoPath) -> Result<ScoutwrapInoPathResult, String> {
    
     let result_ptr;
     unsafe {
@@ -183,12 +182,8 @@ pub struct ScoutwrapListxattrHidden {
     pub hash_pos: u32,
 }
 
-pub fn scoutwrap_listxattr_hidden(fs_root: &File, mut xattr_arg: ScoutwrapListxattrHidden) -> Result<ScoutwrapListxattrHidden, String> {
-    Ok(xattr_arg)
-}
-
 // fd: file descriptor for file being queried
-pub fn scoutwrap_check_xattr_exists(fd: BorrowedFd, mut xattr_arg: ScoutwrapListxattrHidden) -> Result<bool, String> {
+pub fn scoutwrap_check_xattr_exists(fd: BorrowedFd, xattr_arg: ScoutwrapListxattrHidden) -> Result<bool, String> {
     
     unsafe {
 

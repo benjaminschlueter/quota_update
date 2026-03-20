@@ -10,18 +10,16 @@ use std::fs::OpenOptions;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::path::Path;
 use std::ffi::{c_char, c_void, CString, CStr};
-use std::io::{Error, ErrorKind};
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::ErrorKind;
+use std::io::{BufReader, Read, Write};
 use std::time::{Instant, Duration};
 use std::alloc::{alloc, Layout};
 use std::ptr;
 use std::env;
 
-use nix::fcntl::{OFlag, AtFlags};
+use nix::fcntl::OFlag;
 use nix::sys::stat::{Mode, SFlag};
 use nix::sys::stat::fstat;
-use nix::sys::stat::fstatat;
 
 const STARTUP_VERBOSE: bool = true;
 const LOOP_VERBOSE: bool = false;
@@ -52,12 +50,16 @@ fn main() {
                         .open(STATE_FILE);
 
     // if state file does not exist, create it and start from 0. On all other errors, panic. 
+
     match state_file_res {
         Ok(f) => {
             let mut reader = BufReader::new(&f);
             let mut starting_state_str = String::new();
 
-            reader.read_to_string(&mut starting_state_str);
+            if let Err(e) = reader.read_to_string(&mut starting_state_str) {
+                panic!("read_to_string: {}", e.to_string());
+            }
+
             let input_vec: Vec<String> = starting_state_str.split("\n").map(|s| s.to_string()).collect();
 
             starting_major = input_vec[0].trim().parse().expect("state file does not contain valid integer");
@@ -83,33 +85,13 @@ fn main() {
                          .read(true)
                          .open(NEW_STATE_FILE);
 
-    match state_file_new_res {
-        Ok(f) => {
-            if STARTUP_VERBOSE {
-                println!("Reading starting_state from found state swap file")
-            }
-
-            let mut reader = BufReader::new(&f);
-            let mut starting_state_str = String::new();
-
-            reader.read_to_string(&mut starting_state_str);
-            
-            let input_vec: Vec<String> = starting_state_str.split("\n").map(|s| s.to_string()).collect();
-
-            starting_major = input_vec[0].trim().parse().expect("state file does not contain valid integer");
-            starting_ino = input_vec[1].trim().parse().expect("state file does not contain valid integer");
-            starting_minor = input_vec[2].trim().parse().expect("state file does not contain valid integer");
-
-            drop(f); // needs to close before rename at end of execution
-
-            if let Err(e) = std::fs::remove_file(Path::new(NEW_STATE_FILE)) {
-                panic!("failed to remove NEW_STATE_FILE");
-            }
+    if let Ok(_f) = state_file_new_res {
+        if STARTUP_VERBOSE {
+            println!("Detected state tmp file... removing")
         }
-        Err(e) => {
-            if e.kind() != ErrorKind::NotFound {
-                panic!("open: {}\nFailed to open state swap file", e.to_string());
-            }
+
+        if let Err(e) = std::fs::remove_file(Path::new(NEW_STATE_FILE)) {
+            panic!("failed to remove tmp state file: {e}");
         }
     }
 
@@ -162,8 +144,6 @@ fn main() {
         Ok(m) => ns_inode_map = m,
         Err(e) => panic!("nswrap_build_map: {e}"),
     }
-
-    println!("{:?}", ns_inode_map);
 
     println!("Running quota_update with starting state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
 
@@ -259,6 +239,10 @@ fn main() {
                     panic!("fstat: {} at {}", e, path);
                 }
             }
+
+            if ino != stat_struct.st_ino {
+                panic!("ioctl result inode different from stat struct inode");
+            }
             
             // skip directories
             if !SFlag::from_bits_truncate(stat_struct.st_mode).contains(SFlag::S_IFDIR) {
@@ -273,7 +257,7 @@ fn main() {
                 match wrap_libc_fgetxattr(fd.as_fd()) {
                     Ok(x) => marfs_xattr = x,
                     Err(e) => {
-                        if e.raw_os_error() == Some(libc::ENODATA) || e.raw_os_error() == Some(libc::ENOATTR) {
+                        if e.raw_os_error() == Some(libc::ENODATA) {
                             if LOOP_VERBOSE {
                                 println!("MarFS xattr not found, skipping this file")
                             }
@@ -328,33 +312,6 @@ fn main() {
                 if LOOP_VERBOSE {
                     println!("detected existing xattr: {:?}", xattr_exists_bool);
                 }
-                
-                // get namespace root dir inode for xattr name
-                // REMOVE
-                let mut ns_path = String::new();
-                match ns_path_from_streamid(&ftag) {
-                    Ok(s) => ns_path = s,
-                    Err(e) => {
-                        panic!("ns_path_from_streamid: {e} at {path}");
-                    }
-                }
-
-                // replace ns_path with streamid_key
-                
-                if LOOP_VERBOSE {
-                    println!("namespace path: {}", &ns_path);
-                }
-
-                // get namespace inode
-                /*
-                let ns_stat_struct;
-                match fstatat(fs_root.as_fd(), Path::new(&ns_path), AtFlags::empty()) {
-                    Ok(s) => ns_stat_struct = s,
-                    Err(e) => {
-                        panic!("fstatat: {e} at {}", &ns_path);
-                    }
-                }
-                */
 
                 let int1 = QUOTA_MAGIC_NUM;
                 let int2 = 0; // repo num
@@ -379,25 +336,25 @@ fn main() {
                 }
 
                 // if files are complete, have link count 2 and no xattr: add to quota
-                if (!xattr_exists_bool && file_mode == "COMP" && stat_struct.st_nlink == 2) {
+                if !xattr_exists_bool && file_mode == "COMP" && stat_struct.st_nlink == 2 {
                     
                     if let Err(e) = wrap_libc_fsetxattr(fd.as_fd(), xattr_name, ftag.bytes.to_string(), ftag.bytes.to_string().len()) {
                         panic!("wrap_libc_fsetxattr: {e} at {path}");
                     }
 
                     if QUOTA_CHANGE_VERBOSE {
-                        println!("Namespace {} Quota + {}", &ns_path, ftag.bytes);
+                        println!("Namespace {} Quota + {}", &streamid_key, ftag.bytes);
                     }
 
                 }
                 // files that have an xattr but are user deleted: subtract from quota
-                else if (xattr_exists_bool && stat_struct.st_nlink < 2) {
+                else if xattr_exists_bool && stat_struct.st_nlink < 2 {
                     if let Err(e) = wrap_libc_fremovexattr(fd.as_fd(), xattr_name) {
                         panic!("wrap_libc_fremovexattr: {e} at {path}");
                     }
 
                     if QUOTA_CHANGE_VERBOSE {
-                        println!("Namespace {} Quota - {}", &ns_path, ftag.bytes);
+                        println!("Namespace {} Quota - {}", &streamid_key, ftag.bytes);
                     }
                     
                 }
@@ -431,9 +388,14 @@ fn main() {
                                         .expect("failed to open temporary state file");
                 
                 let write_str = format!("{}\n{}\n{}", final_major.to_string(), final_ino.to_string(), final_minor.to_string());
-                new_state_file.write_all(write_str.as_bytes());
+                
+                if let Err(e) = new_state_file.write_all(write_str.as_bytes()) {
+                    panic!("failed to write new state: {}", e.to_string());
+                }
 
-                std::fs::rename(NEW_STATE_FILE, STATE_FILE);
+                if let Err(e) = std::fs::rename(NEW_STATE_FILE, STATE_FILE) {
+                    panic!("failed to rename tmp state file: {}", e.to_string())
+                }
             }
 
             last_checkpoint = cur_time;
@@ -450,9 +412,8 @@ fn main() {
     }
 
     // update MarFS quotas
-    match nswrap_update_quota(config.rootns, fs_root.as_fd()) {
-        Ok(l) => {}
-        Err(e) => panic!("{}", e),
+    if let Err(e) = nswrap_update_quota(config.rootns, fs_root.as_fd()) {
+        panic!("nswrap_update_quota: {}", e);
     }
 
     // If there is nothing to do, the finals won't be updated from 0. print startings instead to not confuse user.
@@ -468,7 +429,7 @@ fn main() {
 fn wrap_libc_fgetxattr(fd: BorrowedFd) -> Result<String, std::io::Error> {
 
     unsafe {
-        let mut value_str_buf = libc::calloc(1, STR_BUF_SIZE); 
+        let value_str_buf = libc::calloc(1, STR_BUF_SIZE); 
     
         if fgetxattr(fd.as_raw_fd(), CString::new("user.MDAL_MARFS-FILE").expect("bad path").as_ptr() as *const c_char, value_str_buf, STR_BUF_SIZE) == -1 {
             return Err(std::io::Error::last_os_error());
@@ -519,36 +480,6 @@ fn get_ftag(marfs_xattr: &str) -> Result<FTAG, String>{
     }
 }
 
-fn ns_path_from_streamid(ftag: &FTAG) -> Result<String, String> {
-
-    // convert streamid to Rust string
-    let streamid_rust_str;
-
-    unsafe {
-        streamid_rust_str = CStr::from_ptr(ftag.streamid).to_string_lossy().into_owned();
-    }
-
-    let vec1: Vec<String> = streamid_rust_str.split("##").map(|s| s.to_string()).collect();
-    
-    if vec1.len() != 2 {
-        
-        return Err(String::from("incorrect vec1 length during streamid parsing"))
-    }
-
-    let mut vec2: Vec<&str> = vec1[1].split('#').collect();
-    vec2.pop();
-
-    if vec2.len() == 0 {
-        return Err(String::from("incorrect vec2 length during streamid parsing"))
-    }
-
-    let mut ns_path = String::new();
-    for entry in &vec2 {
-        ns_path = ns_path + "MDAL_subspaces/" + entry + "/";
-    }
-
-    return Ok(ns_path)
-}
 
 fn get_marfs_file_mode(marfs_xattr: &str) -> Result<String, String> {
 
@@ -588,12 +519,6 @@ fn wrap_config_init(config_path: String) -> Result<marfs_config, String> {
         }
 
         Ok(*config)
-    }
-}
-
-fn get_root_ns_string(root_ns: *mut marfs_ns) -> String{
-    unsafe { 
-        CStr::from_ptr((*root_ns).idstr as *const i8).to_str().expect("bad namespace id string").to_owned() 
     }
 }
 
