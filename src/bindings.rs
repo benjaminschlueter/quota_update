@@ -15631,6 +15631,21 @@ unsafe extern "C" {
         totals: *mut scoutfs_ioctl_read_xattr_totals,
     ) -> ::std::os::raw::c_int;
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct nswrap_entry_ {
+    pub ns_key: *mut ::std::os::raw::c_char,
+    pub ino: u64_,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of nswrap_entry_"][::std::mem::size_of::<nswrap_entry_>() - 16usize];
+    ["Alignment of nswrap_entry_"][::std::mem::align_of::<nswrap_entry_>() - 8usize];
+    ["Offset of field: nswrap_entry_::ns_key"]
+        [::std::mem::offset_of!(nswrap_entry_, ns_key) - 0usize];
+    ["Offset of field: nswrap_entry_::ino"][::std::mem::offset_of!(nswrap_entry_, ino) - 8usize];
+};
+pub type nswrap_entry = nswrap_entry_;
 unsafe extern "C" {
     pub fn nswrap_update_quota_c(
         root_ns: *mut marfs_ns,
@@ -15638,9 +15653,18 @@ unsafe extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 unsafe extern "C" {
-    pub fn rec_ns_subspace_walk(
+    pub fn rec_ns_subspace_walk_quota(
         ns: *mut marfs_ns,
         xattr_totals_buf: *mut scoutfs_ioctl_xattr_total,
+    ) -> ::std::os::raw::c_int;
+}
+unsafe extern "C" {
+    pub fn nswrap_build_map_c(root_ns: *mut marfs_ns) -> *mut nswrap_entry;
+}
+unsafe extern "C" {
+    pub fn rec_ns_subspace_walk_map(
+        ns: *mut marfs_ns,
+        map_buf: *mut nswrap_entry,
     ) -> ::std::os::raw::c_int;
 }
 pub type __builtin_va_list = [__va_list_tag; 1usize];

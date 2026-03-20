@@ -24,7 +24,7 @@ use nix::sys::stat::fstat;
 use nix::sys::stat::fstatat;
 
 const STARTUP_VERBOSE: bool = true;
-const LOOP_VERBOSE: bool = false;
+const LOOP_VERBOSE: bool = true;
 const QUOTA_CHANGE_VERBOSE: bool = true;
 const QUOTA_MAGIC_NUM: u32 = 123;
 const BATCH_SIZE: usize = 3;
@@ -144,8 +144,6 @@ fn main() {
         index: 0,
     };
 
-    let mut ns_inode_cache = HashMap::new();
-
     let mut final_major = 0;
     let mut final_ino = 0;
     let mut final_minor = 0;
@@ -156,6 +154,13 @@ fn main() {
     match wrap_config_init(CONFIG_PATH.to_string()) {
         Ok(c) => config = c,
         Err(e) => panic!("config_init: {}", e),
+    }
+
+    // fill with inode mappings to all namespaces
+    let ns_inode_map;
+    match nswrap_build_map(config.rootns) {
+        Ok(m) => ns_inode_map = m,
+        Err(e) => panic!("nswrap_build_map: {e}"),
     }
 
     println!("Running quota_update with starting state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
@@ -261,6 +266,7 @@ fn main() {
                     println!("{:?}", entry);
                 }
 
+
                 let mut marfs_xattr = String::new();
                 match wrap_libc_fgetxattr(fd.as_fd()) {
                     Ok(x) => marfs_xattr = x,
@@ -291,6 +297,14 @@ fn main() {
                     }
                 }
 
+                let streamid_key;
+                match get_streamid_key(ftag) {
+                    Ok(k) => streamid_key = k,
+                    Err(e) => panic!("get_streamid_key: {e}"),
+                }
+
+                println!("{}", streamid_key);
+
                 let existing_xattrs = ScoutwrapListxattrHidden {
                     id_pos: 0,
                     xattr_list: Vec::new(),
@@ -312,6 +326,7 @@ fn main() {
                 }
                 
                 // get namespace root dir inode for xattr name
+                // REMOVE
                 let mut ns_path = String::new();
                 match ns_path_from_streamid(&ftag) {
                     Ok(s) => ns_path = s,
@@ -319,6 +334,8 @@ fn main() {
                         panic!("ns_path_from_streamid: {e} at {path}");
                     }
                 }
+
+                // replace ns_path with streamid_key
                 
                 if LOOP_VERBOSE {
                     println!("namespace path: {}", &ns_path);
@@ -358,8 +375,6 @@ fn main() {
                         panic!("wrap_libc_fsetxattr: {e} at {path}");
                     }
 
-                    ns_inode_cache.insert(ns_stat_struct.st_ino, ns_path.clone());
-
                     if QUOTA_CHANGE_VERBOSE {
                         println!("Namespace {} Quota + {}", &ns_path, ftag.bytes);
                     }
@@ -370,8 +385,6 @@ fn main() {
                     if let Err(e) = wrap_libc_fremovexattr(fd.as_fd(), xattr_name) {
                         panic!("wrap_libc_fremovexattr: {e} at {path}");
                     }
-
-                    ns_inode_cache.insert(ns_stat_struct.st_ino, ns_path.clone());
 
                     if QUOTA_CHANGE_VERBOSE {
                         println!("Namespace {} Quota - {}", &ns_path, ftag.bytes);
@@ -573,3 +586,20 @@ fn get_root_ns_string(root_ns: *mut marfs_ns) -> String{
         CStr::from_ptr((*root_ns).idstr as *const i8).to_str().expect("bad namespace id string").to_owned() 
     }
 }
+
+fn get_streamid_key(ftag: FTAG) -> Result<String, String> {
+    unsafe {
+        let full = CStr::from_ptr(ftag.streamid as *const i8).to_str().expect("bad streamid string").to_owned(); 
+        
+        let mut vec1: Vec<String> = full.split("#").map(|s| s.to_string()).collect();
+
+        if vec1.len() < 3 {
+            return Err(String::from("incorrect vec1 length during streamid parsing"))
+        }
+
+        vec1.pop();
+
+        Ok(vec1.join("#"))
+    }
+}
+
