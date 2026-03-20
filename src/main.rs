@@ -24,7 +24,7 @@ use nix::sys::stat::fstat;
 use nix::sys::stat::fstatat;
 
 const STARTUP_VERBOSE: bool = true;
-const LOOP_VERBOSE: bool = true;
+const LOOP_VERBOSE: bool = false;
 const QUOTA_CHANGE_VERBOSE: bool = true;
 const QUOTA_MAGIC_NUM: u32 = 123;
 const BATCH_SIZE: usize = 3;
@@ -162,6 +162,8 @@ fn main() {
         Ok(m) => ns_inode_map = m,
         Err(e) => panic!("nswrap_build_map: {e}"),
     }
+
+    println!("{:?}", ns_inode_map);
 
     println!("Running quota_update with starting state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
 
@@ -303,7 +305,9 @@ fn main() {
                     Err(e) => panic!("get_streamid_key: {e}"),
                 }
 
-                println!("{}", streamid_key);
+                if LOOP_VERBOSE {
+                    println!("streamid_key: {}", streamid_key);
+                }
 
                 let existing_xattrs = ScoutwrapListxattrHidden {
                     id_pos: 0,
@@ -342,6 +346,7 @@ fn main() {
                 }
 
                 // get namespace inode
+                /*
                 let ns_stat_struct;
                 match fstatat(fs_root.as_fd(), Path::new(&ns_path), AtFlags::empty()) {
                     Ok(s) => ns_stat_struct = s,
@@ -349,10 +354,15 @@ fn main() {
                         panic!("fstatat: {e} at {}", &ns_path);
                     }
                 }
+                */
 
                 let int1 = QUOTA_MAGIC_NUM;
                 let int2 = 0; // repo num
-                let int3 = ns_stat_struct.st_ino;
+                let int3;
+                match ns_inode_map.get(&streamid_key) {
+                    Some(i) => int3 = i,
+                    None => panic!("no inode found for streamid {streamid_key}"),
+                }
 
                 let xattr_name = format!("scoutfs.hide.totl.acct.{}.{}.{}", int1, int2, int3);
 

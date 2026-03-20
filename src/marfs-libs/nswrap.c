@@ -56,8 +56,8 @@ int rec_ns_subspace_walk_quota(marfs_ns* ns, struct scoutfs_ioctl_xattr_total* x
         return -1;
     }
 
-    printf("config_nsinfo repo_str: %s\n", repo_str);
-    printf("config_nsinfo path_str: %s\n", path_str);
+    //printf("config_nsinfo repo_str: %s\n", repo_str);
+    //printf("config_nsinfo path_str: %s\n", path_str);
     
     if (ns->prepo->metascheme.mdal->setnamespace(dup_ctxt, path_str) == -1) {
         perror("mdal->setnamespace");
@@ -134,8 +134,8 @@ int rec_ns_subspace_walk_map(marfs_ns* ns, nswrap_entry* map_buf) {
         return -1;
     }
 
-    printf("config_nsinfo repo_str: %s\n", repo_str);
-    printf("config_nsinfo path_str: %s\n", path_str);
+    //printf("config_nsinfo repo_str: %s\n", repo_str);
+    //printf("config_nsinfo path_str: %s\n", path_str);
 
     if (ns->prepo->metascheme.mdal->setnamespace(dup_ctxt, path_str) == -1) {
         perror("mdal->setnamespace");

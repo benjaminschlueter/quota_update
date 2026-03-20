@@ -1,5 +1,5 @@
 content="asdfjklasdfjlhafljdkhfkjasd"
 
-for i in {2..10}; do 
- echo $content > /campaign/test1/file$i
+for i in {11..20}; do 
+ echo $content > /campaign/test2/file$i
 done

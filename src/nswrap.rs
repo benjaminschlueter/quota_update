@@ -44,7 +44,7 @@ pub fn nswrap_build_map(root_ns_arg: *mut marfs_ns) -> Result<HashMap<String, u6
 
             let ns_key_str = CStr::from_ptr(entry.ns_key as *const i8).to_str().expect("bad ns_key string").to_owned(); 
 
-            map.insert(ns_key_str, entry.ino);
+            map.insert(ns_key_str.replace('/', "#"), entry.ino);
         }
     }
 
