@@ -4,4 +4,4 @@ libnswrap.a:
 	gcc -g -I$(XML_INCLUDE_PATH) -I../marfs/src -I../scoutfs -c -fPIC nswrap.c -o libnswrap.a
 
 clean:
-	rm libnswrap.a
+	rm -f libnswrap.a

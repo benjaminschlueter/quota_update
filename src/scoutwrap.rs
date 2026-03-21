@@ -210,7 +210,6 @@ pub fn scoutwrap_listxattr_hidden(fd: BorrowedFd, xattr_arg: ScoutwrapListxattrH
         }
 
         // create vector of strings to return
-        let err_string: String;
         let buf = slice::from_raw_parts(existing_xattrs.buf_ptr as *const u8, existing_xattrs.buf_bytes as usize);
         let xattr_str_vec = buf.split(|b| *b == 0) // create an iterator over null terminated string subslices
                 .filter_map(|slice| {

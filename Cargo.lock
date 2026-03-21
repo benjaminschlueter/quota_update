@@ -237,6 +237,7 @@ dependencies = [
  "bindgen",
  "libc",
  "nix",
+ "rustix",
  "users",
  "whoami",
  "xattr",

@@ -21,6 +21,8 @@ use nix::fcntl::OFlag;
 use nix::sys::stat::{Mode, SFlag};
 use nix::sys::stat::fstat;
 
+use rustix::fs::XattrFlags;
+
 const STARTUP_VERBOSE: bool = true;
 const LOOP_VERBOSE: bool = false;
 const QUOTA_CHANGE_VERBOSE: bool = true;
@@ -251,13 +253,16 @@ fn main() {
                     println!("\npath: {path}");
                     println!("{:?}", entry);
                 }
-
-
-                let mut marfs_xattr = String::new();
-                match wrap_libc_fgetxattr(fd.as_fd()) {
-                    Ok(x) => marfs_xattr = x,
-                    Err(e) => {
-                        if e.raw_os_error() == Some(libc::ENODATA) {
+                
+                let marfs_xattr: String;
+                let mut buf = vec![0u8; STR_BUF_SIZE];
+                match rustix::fs::fgetxattr(fd.as_fd(), String::from("user.MDAL_MARFS-FILE").as_bytes(), &mut buf) {
+                    Ok(b) => {
+                        buf.truncate(b);
+                        marfs_xattr = String::from_utf8(buf).expect("bad xattr string");
+                    }
+                    Err(e) =>  {
+                        if e == rustix::io::Errno::NODATA {
                             if LOOP_VERBOSE {
                                 println!("MarFS xattr not found, skipping this file")
                             }
@@ -309,7 +314,7 @@ fn main() {
                     None => panic!("no inode found for streamid {streamid_key}"),
                 }
 
-                let xattr_name = format!("scoutfs.hide.totl.acct.{}.{}.{}", int1, int2, int3);
+                let mut xattr_name = format!("scoutfs.hide.totl.acct.{}.{}.{}", int1, int2, int3);
 
                 if LOOP_VERBOSE {
                     println!("xattr name: {xattr_name}");
@@ -332,6 +337,16 @@ fn main() {
                         break;
                     }
                 }
+
+                // if there are any error strings in the vector and a valid xattr was not found, panic.
+                // no need to panic if another xattr string errored and we have confirmation of a valid quota_update xattr
+                if !xattr_exists_bool {
+                    for xattr in &xattr_str_vec {
+                        if (*xattr).contains("error") {
+                            panic!("found an error string in xattr_list without prior confirmation of a valid quota_update xattr");
+                        }
+                }
+                }
                 
                 if LOOP_VERBOSE {
                     println!("detected existing xattr: {:?}", xattr_exists_bool);
@@ -347,9 +362,9 @@ fn main() {
 
                 // if files are complete, have link count 2 and no xattr: add to quota
                 if !xattr_exists_bool && file_mode == "COMP" && stat_struct.st_nlink == 2 {
-                    
-                    if let Err(e) = wrap_libc_fsetxattr(fd.as_fd(), xattr_name, ftag.bytes.to_string(), ftag.bytes.to_string().len()) {
-                        panic!("wrap_libc_fsetxattr: {e} at {path}");
+
+                    if let Err(e) = rustix::fs::fsetxattr(fd.as_fd(), xattr_name.as_bytes(), ftag.bytes.to_string().as_bytes(), XattrFlags::empty()) {
+                        panic!("fsetxattr: {e} at {path}");
                     }
 
                     if QUOTA_CHANGE_VERBOSE {
@@ -359,8 +374,9 @@ fn main() {
                 }
                 // files that have an xattr but are user deleted: subtract from quota
                 else if xattr_exists_bool && stat_struct.st_nlink < 2 {
-                    if let Err(e) = wrap_libc_fremovexattr(fd.as_fd(), xattr_name) {
-                        panic!("wrap_libc_fremovexattr: {e} at {path}");
+
+                    if let Err(e) = rustix::fs::fremovexattr(fd.as_fd(), xattr_name.as_bytes()) {
+                        panic!("fremovexattr: {e} at {path}");
                     }
 
                     if QUOTA_CHANGE_VERBOSE {
@@ -430,46 +446,6 @@ fn main() {
         println!("Finished quota_update at final state (major: {}, ino: {}, minor: {})", final_major, final_ino, final_minor);
     }
 
-}
-
-// Nix doesn't provide xattr ops :(
-fn wrap_libc_fgetxattr(fd: BorrowedFd) -> Result<String, std::io::Error> {
-
-    unsafe {
-        let value_str_buf = libc::calloc(1, STR_BUF_SIZE); 
-    
-        if fgetxattr(fd.as_raw_fd(), CString::new("user.MDAL_MARFS-FILE").expect("bad path").as_ptr() as *const c_char, value_str_buf, STR_BUF_SIZE) == -1 {
-            return Err(std::io::Error::last_os_error());
-        } 
-
-        let value_str = CStr::from_ptr(value_str_buf as *const i8).to_str().expect("bad value string").to_owned();
-
-        Ok(value_str)
-    }
-}
-
-// Nix doesn't provide xattr ops :(
-fn wrap_libc_fsetxattr(fd: BorrowedFd, name: String, value: String, length: usize) -> Result<(), String> {
-
-    unsafe {
-        if fsetxattr(fd.as_raw_fd(), CString::new(name).expect("bad name string").as_ptr() as *const c_char, CString::new(value).expect("bad value string").as_ptr() as *const c_void, length, 0) == -1 {
-            return Err(std::io::Error::last_os_error().to_string());
-        } 
-    }
-
-    Ok(())
-}
-
-// Nix doesn't provide xattr ops :(
-fn wrap_libc_fremovexattr(fd: BorrowedFd, name: String) -> Result<(), String> {
-
-    unsafe {
-        if fremovexattr(fd.as_raw_fd(), CString::new(name).expect("bad name string").as_ptr() as *const c_char) == -1 {
-            return Err(std::io::Error::last_os_error().to_string());
-        } 
-    }
-
-    Ok(())
 }
 
 /* Hide ugly unsafe code of creating FTAG from marfs xattr

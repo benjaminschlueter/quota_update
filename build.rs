@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::fs::File;
 use std::io::Write;
 use std::io::ErrorKind;
+use std::process::Command;
 
 fn main() {
     let mut log_file = File::create("build.log").expect("Failed to create build.log file");
@@ -15,6 +16,38 @@ fn main() {
     log_file.write_all(b"Top level MarFS source directory: ").expect("Failed to write to build.log");
     log_file.write_all(marfs_path.clone().into_os_string().as_encoded_bytes()).expect("Failed to write to build.log");
     log_file.write_all(b"\n").expect("Failed to write to build.log");
+
+    // compile C libraries nswrap, scoutwrap; user is responsible for compiling MarFS, ScoutFS on their own
+    let nswrap_clean = Command::new("make")
+                            .arg("-C")
+                            .arg("src/nswrap")
+                            .arg("clean")
+                            .status()
+                            .expect("failed to clean src/nswrap");
+
+    let nswrap_make = Command::new("make")
+                            .arg("-C")
+                            .arg("src/nswrap")
+                            .status()
+                            .expect("failed to make src/nswrap");
+
+    let scoutwrap_clean = Command::new("make")
+                            .arg("-C")
+                            .arg("src/scoutwrap")
+                            .arg("clean")
+                            .status()
+                            .expect("failed to clean src/scoutwrap");
+
+    let scoutwrap_make = Command::new("make")
+                            .arg("-C")
+                            .arg("src/scoutwrap")
+                            .status()
+                            .expect("failed to make src/scoutwrap");
+
+
+
+
+    
 
        
     let bindings_path = "src/bindings.rs";
@@ -49,15 +82,15 @@ fn main() {
 
     // ScoutFS headers
 
-    let scoutwrap_path = top_path.join("src/scoutfs-libs/scoutwrap.h");
+    let scoutwrap_path = top_path.join("src/scoutwrap/scoutwrap.h");
     let scoutwrap_path_str = scoutwrap_path.to_str().expect("Failed to convert header path to String");
 
-    let nswrap_path = top_path.join("src/marfs-libs/nswrap.h");
+    let nswrap_path = top_path.join("src/nswrap/nswrap.h");
     let nswrap_path_str = nswrap_path.to_str().expect("Failed to convert header path to String");
 
     // ScoutFS is kernel code and does not provide libs; Need a user library wrapper for the ioctl
     
-    //let libdir_path = marfs_path.join("src/api/.libs:/home/benja/quota_update/src/scoutfs-libs");
+    //let libdir_path = marfs_path.join("src/api/.libs:/home/benja/quota_update/src/scoutwrap");
     let libdir_path = marfs_path.join("src/api/.libs");
     
     log_file.write_all(b"Searching for libs in: ").expect("Failed to write to build.log");
@@ -97,8 +130,8 @@ fn main() {
     //log_file.write_all(log_string.as_bytes()).expect("Failed to write to build.log");
 
     let marfs_lib_path = top_path.join("src/marfs/src/api/.libs");
-    let scoutwrap_lib_path = top_path.join("src/scoutfs-libs");
-    let nswrap_lib_path = top_path.join("src/marfs-libs");
+    let scoutwrap_lib_path = top_path.join("src/scoutwrap");
+    let nswrap_lib_path = top_path.join("src/nswrap");
     
     println!("cargo:rustc-link-arg=-Wl,-rpath,{}", marfs_lib_path.to_str().unwrap());
     println!("cargo:rustc-link-search={}", marfs_lib_path.to_str().unwrap());

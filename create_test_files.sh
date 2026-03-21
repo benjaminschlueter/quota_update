@@ -1,5 +1,5 @@
 content="asdfjklasdfjlhafljdkhfkjasd"
 
-for i in {51..60}; do 
+for i in {71..80}; do 
  echo $content > /campaign/test2/file$i
 done
