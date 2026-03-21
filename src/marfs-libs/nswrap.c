@@ -6,8 +6,9 @@
 
 int glob_buf_offset = 0; // MAKE ATOMIC
 
-/* Take the root namespace and return a buffer of structs containing inode, ns path mappings.
- * @return pointer to buffer on success, NULL on all error cases
+/* Calls the ScoutFS ioctl function READ_XATTR_TOTALS to get a list of xattrs and quota usages per namespace. 
+ * Calls recursive function to walk the namespace tree and update the quota file to the ioctl returned value.
+ * This is implemented in C to prevent complicated back and forth type conversion in Rust.
  */
 int nswrap_update_quota_c(marfs_ns* root_ns, int root_fd) {
     if (root_ns == NULL) {
@@ -38,7 +39,8 @@ int nswrap_update_quota_c(marfs_ns* root_ns, int root_fd) {
     return 0;
 }
 
-
+/* Recursive tree walk function for updating namespace quotas. Stats the MarFS namespace to get inode, searches xattr buffer for quota and updates quota file.
+*/
 int rec_ns_subspace_walk_quota(marfs_ns* ns, struct scoutfs_ioctl_xattr_total* xattr_totals_buf) {
         
     // stat namespace root to get inode
@@ -55,9 +57,6 @@ int rec_ns_subspace_walk_quota(marfs_ns* ns, struct scoutfs_ioctl_xattr_total* x
         perror("ns_info");
         return -1;
     }
-
-    //printf("config_nsinfo repo_str: %s\n", repo_str);
-    //printf("config_nsinfo path_str: %s\n", path_str);
     
     if (ns->prepo->metascheme.mdal->setnamespace(dup_ctxt, path_str) == -1) {
         perror("mdal->setnamespace");
@@ -82,6 +81,7 @@ int rec_ns_subspace_walk_quota(marfs_ns* ns, struct scoutfs_ioctl_xattr_total* x
                 printf("Updating %s quota to %d\n", path_str, xattr_totals_buf[i].total);
             }
 
+            // update quota file in namespace through MDAL
             if (ns->prepo->metascheme.mdal->setdatausage(dup_ctxt, xattr_totals_buf[i].total) == -1) {
                 perror("mdal->setdatausage");
                 return -1;
@@ -91,6 +91,7 @@ int rec_ns_subspace_walk_quota(marfs_ns* ns, struct scoutfs_ioctl_xattr_total* x
         i++;
     }
 
+    // operate on subspaces if any
     for (int i = 0; i < ns->subnodecount; i++) {
         assert(rec_ns_subspace_walk_quota((marfs_ns *) (ns->subnodes + i)->content, xattr_totals_buf) != -1);
     }
@@ -98,6 +99,9 @@ int rec_ns_subspace_walk_quota(marfs_ns* ns, struct scoutfs_ioctl_xattr_total* x
     return 0;
 }
 
+/* Creates a buffer to be converted to a Rust Hashmap of NS key strings and inodes.
+ * Calls recursive tree walk function to stat each namespace root.
+ */
 nswrap_entry* nswrap_build_map_c(marfs_ns* root_ns) {
     
     if (root_ns == NULL) {
@@ -117,6 +121,8 @@ nswrap_entry* nswrap_build_map_c(marfs_ns* root_ns) {
 
 }
 
+/* Recursive tree walk function for building ns, inode hash table.  
+ */
 int rec_ns_subspace_walk_map(marfs_ns* ns, nswrap_entry* map_buf) {
     
     // stat namespace root to get inode
@@ -133,9 +139,6 @@ int rec_ns_subspace_walk_map(marfs_ns* ns, nswrap_entry* map_buf) {
         perror("ns_info");
         return -1;
     }
-
-    //printf("config_nsinfo repo_str: %s\n", repo_str);
-    //printf("config_nsinfo path_str: %s\n", path_str);
 
     if (ns->prepo->metascheme.mdal->setnamespace(dup_ctxt, path_str) == -1) {
         perror("mdal->setnamespace");

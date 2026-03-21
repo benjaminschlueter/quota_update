@@ -25,7 +25,7 @@ const STARTUP_VERBOSE: bool = true;
 const LOOP_VERBOSE: bool = false;
 const QUOTA_CHANGE_VERBOSE: bool = true;
 const QUOTA_MAGIC_NUM: u32 = 123;
-const BATCH_SIZE: usize = 3;
+const BATCH_SIZE: usize = 128;
 const FS_ROOT_PATH: &str = "/marfs/mdal-root2";
 const STATE_FILE: &str = ".state";
 const NEW_STATE_FILE: &str = ".state.new";
@@ -300,22 +300,10 @@ fn main() {
                     hash_pos: 0,
                 };
 
-                // find if xattr exists for this file: just need to check first byte of return buffer
-                let mut xattr_exists_bool = false;
-                match scoutwrap_check_xattr_exists(fd.as_fd(), existing_xattrs) {
-                    Ok(b) => xattr_exists_bool = b,
-                    Err(e) => {
-                        panic!("scoutwrap_listxattr_hidden: {e} at {path}");
-                    }
-                }
-                
-                if LOOP_VERBOSE {
-                    println!("detected existing xattr: {:?}", xattr_exists_bool);
-                }
-
                 let int1 = QUOTA_MAGIC_NUM;
                 let int2 = 0; // repo num
                 let int3;
+
                 match ns_inode_map.get(&streamid_key) {
                     Some(i) => int3 = i,
                     None => panic!("no inode found for streamid {streamid_key}"),
@@ -325,6 +313,28 @@ fn main() {
 
                 if LOOP_VERBOSE {
                     println!("xattr name: {xattr_name}");
+                }
+
+                // find if xattr exists for this file: just need to check first byte of return buffer
+                let xattr_str_vec;
+                match scoutwrap_listxattr_hidden(fd.as_fd(), existing_xattrs) {
+                    Ok(v) => xattr_str_vec = v,
+                    Err(e) => {
+                        panic!("scoutwrap_listxattr_hidden: {e} at {path}");
+                    }
+                }
+
+                // search xattr list for this programs xattr name
+                let mut xattr_exists_bool = false;
+                for xattr in &xattr_str_vec {
+                    if *xattr == xattr_name {
+                        xattr_exists_bool = true;
+                        break;
+                    }
+                }
+                
+                if LOOP_VERBOSE {
+                    println!("detected existing xattr: {:?}", xattr_exists_bool);
                 }
 
                 let file_mode;
@@ -407,25 +417,22 @@ fn main() {
        
     }
 
-    if final_major == 0 && final_ino == 0 && final_minor == 0 {
-        println!("Finished quota_update at final state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
-    }
-
-    // update MarFS quotas
+    // update MarFS quotas every time even if nothing changes because some totals might lag behind
     if let Err(e) = nswrap_update_quota(config.rootns, fs_root.as_fd()) {
         panic!("nswrap_update_quota: {}", e);
     }
 
-    // If there is nothing to do, the finals won't be updated from 0. print startings instead to not confuse user.
     if final_major == 0 && final_ino == 0 && final_minor == 0 {
         println!("Finished quota_update at final state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
+        return;
     }
     else {
         println!("Finished quota_update at final state (major: {}, ino: {}, minor: {})", final_major, final_ino, final_minor);
     }
+
 }
 
-// using libc fgetxattr to operations similar to
+// Nix doesn't provide xattr ops :(
 fn wrap_libc_fgetxattr(fd: BorrowedFd) -> Result<String, std::io::Error> {
 
     unsafe {
@@ -441,7 +448,7 @@ fn wrap_libc_fgetxattr(fd: BorrowedFd) -> Result<String, std::io::Error> {
     }
 }
 
-// using libc fgetxattr to operations similar to
+// Nix doesn't provide xattr ops :(
 fn wrap_libc_fsetxattr(fd: BorrowedFd, name: String, value: String, length: usize) -> Result<(), String> {
 
     unsafe {
@@ -453,6 +460,7 @@ fn wrap_libc_fsetxattr(fd: BorrowedFd, name: String, value: String, length: usiz
     Ok(())
 }
 
+// Nix doesn't provide xattr ops :(
 fn wrap_libc_fremovexattr(fd: BorrowedFd, name: String) -> Result<(), String> {
 
     unsafe {
@@ -464,6 +472,8 @@ fn wrap_libc_fremovexattr(fd: BorrowedFd, name: String) -> Result<(), String> {
     Ok(())
 }
 
+/* Hide ugly unsafe code of creating FTAG from marfs xattr
+ */
 fn get_ftag(marfs_xattr: &str) -> Result<FTAG, String>{
     
     unsafe { 
@@ -480,7 +490,8 @@ fn get_ftag(marfs_xattr: &str) -> Result<FTAG, String>{
     }
 }
 
-
+/* Return owned string if xattr contains, INIT, COMP or neither
+ */
 fn get_marfs_file_mode(marfs_xattr: &str) -> Result<String, String> {
 
     if marfs_xattr.contains("INIT") {
@@ -494,7 +505,7 @@ fn get_marfs_file_mode(marfs_xattr: &str) -> Result<String, String> {
     }
 }
 
-/*
+/* Hide ugliness of calling config_init from Rust
  * @param config_path: path of config to use or empty for env var MARFS_CONFIG_PATH
  * @return marfs_config struct
  */
@@ -522,6 +533,10 @@ fn wrap_config_init(config_path: String) -> Result<marfs_config, String> {
     }
 }
 
+/* Turns FTAG.streamid into a namespace unique key for the hash table
+ * @param ftag: FTAG struct for this file
+ * @return: owned string with format <REPO>##<NS1>#<NS2>#<NS...>
+ */
 fn get_streamid_key(ftag: FTAG) -> Result<String, String> {
     unsafe {
         let full = CStr::from_ptr(ftag.streamid as *const i8).to_str().expect("bad streamid string").to_owned(); 

@@ -4,6 +4,7 @@ use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::ffi::CStr;
 use std::os::fd::BorrowedFd;
+use std::slice;
 
 pub const STR_BUF_SIZE: usize = 512;
 
@@ -38,7 +39,7 @@ pub struct ScoutwrapWalkInodes {
 
 
 /* WALK_INODES
- * Populates the entries_vec in user_arg to contain nr_entries entry structs from inodes within the minor:major range. This function allocates the buffer. The caller does not have to worry about setting up a buffer.  
+ * Allocates and populates the entries_vec in user_arg to contain nr_entries entry structs from inodes within the minor:major range. This function allocates the buffer. The caller does not have to worry about setting up a buffer.  
  * Moves the callers struct inside, modifies and returns it. 
  */
 pub fn scoutwrap_walk_inodes(root_fs: &File, mut user_arg: ScoutwrapWalkInodes) -> Result<ScoutwrapWalkInodes, String> {
@@ -111,6 +112,8 @@ pub fn scoutwrap_walk_inodes(root_fs: &File, mut user_arg: ScoutwrapWalkInodes) 
 
 }
 
+/* Input for INO_PATH ioctl function
+ */
 #[derive(Debug, Clone)]
 pub struct ScoutwrapInoPath {
     pub ino: u64,
@@ -120,6 +123,8 @@ pub struct ScoutwrapInoPath {
     pub result_bytes: usize,
 }
 
+/* Result output for INO_PATH ioctl function
+ */
 #[derive(Debug, Clone)]
 pub struct ScoutwrapInoPathResult {
     pub ino: u64,
@@ -128,6 +133,11 @@ pub struct ScoutwrapInoPathResult {
     pub path: String,
 }
 
+/* Return result of INO_PATH ioctl function, containing the path of the file with specified inode.
+ * @param root_fs
+ * @param path_arg: struct with input for scoutfs ioctl
+ * @return ioctl result struct
+ */
 pub fn scoutwrap_ino_path(root_fs: &File, path_arg: ScoutwrapInoPath) -> Result<ScoutwrapInoPathResult, String> {
    
     let result_ptr;
@@ -152,17 +162,11 @@ pub fn scoutwrap_ino_path(root_fs: &File, path_arg: ScoutwrapInoPath) -> Result<
 
     let ret_str;
     unsafe {
-        /*
-        let result = ptr::read(path_c.result_ptr as *const scoutfs_ioctl_ino_path_result);
-        ret_str = CStr::from_ptr(result.path.as_ptr() as *const i8).to_str().unwrap().to_owned();
-        */
-
+        // ensure we only get the first string if buffer contains multiple
         let entries_c = Vec::from_raw_parts(path_c.result_ptr as *mut scoutfs_ioctl_ino_path_result, 1, 1);
-        let path_ptr = entries_c[0].path.as_ptr() as *const u8;
-        let slice: &[u8] = std::slice::from_raw_parts(path_ptr, 1);
-
-
-        ret_str = CStr::from_ptr(slice.as_ptr() as *const i8).to_str().unwrap().to_owned();
+        let path_ptr = entries_c[0].path.as_ptr() as *const i8;
+        
+        ret_str = CStr::from_ptr(path_ptr).to_str().unwrap().to_owned();
     }
 
     let ret_struct = ScoutwrapInoPathResult {
@@ -171,19 +175,24 @@ pub fn scoutwrap_ino_path(root_fs: &File, path_arg: ScoutwrapInoPath) -> Result<
         path_bytes: path_arg.result_bytes as u16,
         path: ret_str,
     };
+
     return Ok(ret_struct)
 }
 
 #[derive(Debug, Clone)]
 pub struct ScoutwrapListxattrHidden {
     pub id_pos: u64,
-    pub xattr_list: Vec<String>,
+    pub xattr_list: Vec<String>, // possible to have more than 1 xattr
     pub buf_bytes: usize,
     pub hash_pos: u32,
 }
 
-// fd: file descriptor for file being queried
-pub fn scoutwrap_check_xattr_exists(fd: BorrowedFd, xattr_arg: ScoutwrapListxattrHidden) -> Result<bool, String> {
+/* Return a vector of owned string with the names of ScoutFS xattrs attached to a file.
+ * @param fd: file descriptor for file being queried
+ * @param xattr_arg
+ * @return vector of owned strings with all xattr names
+ */
+pub fn scoutwrap_listxattr_hidden(fd: BorrowedFd, xattr_arg: ScoutwrapListxattrHidden) -> Result<Vec<String>, String> {
     
     unsafe {
 
@@ -200,15 +209,25 @@ pub fn scoutwrap_check_xattr_exists(fd: BorrowedFd, xattr_arg: ScoutwrapListxatt
             return Err(std::io::Error::last_os_error().to_string());
         }
 
-        // to find out if xattrs exist, examine the first byte checking if it is 0 or set
-        let first_byte: u8 = *(existing_xattrs.buf_ptr as *mut u8);
+        // create vector of strings to return
+        let err_string: String;
+        let buf = slice::from_raw_parts(existing_xattrs.buf_ptr as *const u8, existing_xattrs.buf_bytes as usize);
+        let xattr_str_vec = buf.split(|b| *b == 0) // create an iterator over null terminated string subslices
+                .filter_map(|slice| {
 
-        if first_byte == 0 {
-            return Ok(false);
-        }
-        else {
-            return Ok(true);
-        }
+                        if slice.is_empty() {
+                            return None;
+                        }
+
+                        match std::str::from_utf8(slice) {
+                            Ok(s) => Some(s.to_owned()),
+                            Err(e) => Some(String::from("error: failed to parse slice into utf8")),
+
+                            // CALLER IS RESPONSIBLE FOR CHECKING VECTOR FOR ERROR STRINGS
+                        }
+                }).collect();
+
+        return Ok(xattr_str_vec);
     }
 }
 

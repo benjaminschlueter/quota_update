@@ -13,10 +13,6 @@ int wrap_walk_inodes(int root_fd, struct scoutfs_ioctl_walk_inodes *user);
 // INO_PATH
 int wrap_ino_path(int root_fd, struct scoutfs_ioctl_ino_path *path);
 
-char* wrap_ino_path_get_str(int root_fd, struct scoutfs_ioctl_ino_path *path);
-
 // LISTXATTR_HIDDEN
 int wrap_listxattr_hidden(int root_fd, struct scoutfs_ioctl_listxattr_hidden *existing_attrs);
 
-// READ_XATTR_TOTALS
-int wrap_read_xattr_totals(int root_fd, struct scoutfs_ioctl_read_xattr_totals *totals);

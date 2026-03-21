@@ -1,3 +1,6 @@
+/* nswrap helps quota_update work with MarFS namespaces
+ */
+
 use quota_update::*;
 
 use std::os::fd::{BorrowedFd, AsRawFd};
@@ -5,7 +8,9 @@ use std::collections::HashMap;
 use std::ffi::CStr;
 
 
-
+/* Call C function to update quota files for all namespaces.
+ * See nswrap.c for more info.
+ */
 pub fn nswrap_update_quota(root_ns_arg: *mut marfs_ns, root_fd: BorrowedFd) -> Result<(), String> {
 
     unsafe {
@@ -19,6 +24,10 @@ pub fn nswrap_update_quota(root_ns_arg: *mut marfs_ns, root_fd: BorrowedFd) -> R
     Ok(())
 }
 
+/* Creates a HashMap with namespace string keys and inodes of namespace root dir.
+ * The C function walks the namespace tree and stats each namespace root, returning an array buffer of structs to be parsed.
+ * See nswrap.c for more info.
+ */
 pub fn nswrap_build_map(root_ns_arg: *mut marfs_ns) -> Result<HashMap<String, u64>, String> {
     
     let mut map: HashMap<String, u64> = HashMap::new();
