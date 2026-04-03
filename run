@@ -1,1 +1,0 @@
-sudo MARFS_CONFIG_PATH=/opt/campaign/install/etc/marfs-config.xml ./target/debug/quota_update --root-scoutfs /marfs/mdal-root -s -q
