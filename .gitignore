@@ -4,4 +4,8 @@ run
 .state.swp
 log
 /scripts
+/src/marfs
+/src/scoutfs
+/src/scoutwrap/libscoutwrap.a
+/src/nswrap/libnswrap.a
 
