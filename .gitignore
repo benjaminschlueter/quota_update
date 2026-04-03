@@ -1,5 +1,7 @@
 /target
-.major
-.major.new
 run
+.state
+.state.swp
+log
+/scripts
 
