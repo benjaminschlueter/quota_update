@@ -8,4 +8,5 @@ log
 /src/scoutfs
 /src/scoutwrap/libscoutwrap.a
 /src/nswrap/libnswrap.a
+/src/bindings.rs
 
