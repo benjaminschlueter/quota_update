@@ -44,11 +44,6 @@ fn main() {
                             .status()
                             .expect("failed to make src/scoutwrap");
 
-
-
-
-    
-
        
     let bindings_path = "src/bindings.rs";
     match fs::remove_file(bindings_path) {
@@ -90,7 +85,6 @@ fn main() {
 
     // ScoutFS is kernel code and does not provide libs; Need a user library wrapper for the ioctl
     
-    //let libdir_path = marfs_path.join("src/api/.libs:/home/benja/quota_update/src/scoutwrap");
     let libdir_path = marfs_path.join("src/api/.libs");
     
     log_file.write_all(b"Searching for libs in: ").expect("Failed to write to build.log");

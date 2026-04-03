@@ -23,16 +23,9 @@ use nix::sys::stat::fstat;
 
 use rustix::fs::XattrFlags;
 
-const STARTUP_VERBOSE: bool = true;
-const LOOP_VERBOSE: bool = false;
-const QUOTA_CHANGE_VERBOSE: bool = true;
+use clap::{Parser, ArgAction};
+
 const QUOTA_MAGIC_NUM: u32 = 123;
-const BATCH_SIZE: usize = 128;
-const FS_ROOT_PATH: &str = "/marfs/mdal-root2";
-const STATE_FILE: &str = ".state";
-const NEW_STATE_FILE: &str = ".state.new";
-const CHECKPOINT_MS: u64 = 60000; // WARNING: will fail to update state file if this is too small
-const CONFIG_PATH: &str = "/opt/campaign/install/etc/marfs-config.xml";
 const QUOTA_FILE_NAME: &str = "MDAL_datasize";
 
 fn main() {
@@ -42,6 +35,65 @@ fn main() {
         panic!("Must run as root!");
     }
 
+    let args = Args::parse();
+
+    // set vars 
+    let CHECKPOINT_MS: u64; // WARNING: will fail to update state file if this is too small (< 100)
+    match args.checkpoint_ms {
+        Some(m) => CHECKPOINT_MS = m,
+        None => CHECKPOINT_MS = 60000,
+    }
+
+    let BATCH_SIZE: usize;
+    match args.batch_size {
+        Some(b) => BATCH_SIZE = b,
+        None => BATCH_SIZE = 65536,
+    }
+
+    let STATE_VERBOSE = args.state_verbose.unwrap();
+    let LOOP_VERBOSE = args.loop_verbose.unwrap();
+    let QUOTA_UPDATE_VERBOSE = args.quota_update_verbose.unwrap();
+    
+    /*
+    match args.state_verbose {
+        Some(s) => STATE_VERBOSE = s,
+        None => STATE_VERBOSE = true,
+    }
+
+    let LOOP_VERBOSE: bool;
+    match args.loop_verbose {
+        Some(l) => LOOP_VERBOSE = l,
+        None => LOOP_VERBOSE = false,
+    }
+    
+    let QUOTA_UPDATE_VERBOSE: bool;
+    match args.quota_update_verbose {
+        Some(q) => QUOTA_UPDATE_VERBOSE = q,
+        None => QUOTA_UPDATE_VERBOSE = true,
+    }
+    */
+
+    let CONFIG_PATH: String;
+    match args.config_path {
+        Some(p) => CONFIG_PATH = p,
+        None => CONFIG_PATH = env::var("MARFS_CONFIG_PATH").expect("no config path provided and MARFS_CONFIG_PATH not set"),
+    }
+
+    let STATE_FILE: String;
+    let STATE_SWAP_FILE: String;
+    match args.state_file_path {
+        Some(p) => {
+            STATE_FILE = p;
+            STATE_SWAP_FILE = format!("{STATE_FILE}.swp");
+        }
+        None => {
+            STATE_FILE = String::from(".state");
+            STATE_SWAP_FILE = String::from(".state.swp");
+        }
+    }
+   
+    let FS_ROOT_PATH = args.root_scoutfs;
+    
     let mut starting_major: i32 = 0;
     let mut starting_ino: i32 = 0;
     let mut starting_minor: i32 = 0;
@@ -49,7 +101,7 @@ fn main() {
     // read state from state file 
     let state_file_res = OpenOptions::new()
                         .read(true)
-                        .open(STATE_FILE);
+                        .open(&STATE_FILE);
 
     // if state file does not exist, create it and start from 0. On all other errors, panic. 
 
@@ -72,7 +124,7 @@ fn main() {
         }
         Err(e) => {
             if e.kind() == ErrorKind::NotFound {
-                if STARTUP_VERBOSE {
+                if STATE_VERBOSE {
                     println!("No state file found: starting at initial state 0");
                 }
             }
@@ -82,26 +134,26 @@ fn main() {
         }
     }
     
-    // check for existing NEW_STATE_FILE 
+    // check for existing STATE_SWAP_FILE 
     let state_file_new_res = OpenOptions::new()
                          .read(true)
-                         .open(NEW_STATE_FILE);
+                         .open(&STATE_SWAP_FILE);
 
     if let Ok(_f) = state_file_new_res {
-        if STARTUP_VERBOSE {
+        if STATE_VERBOSE {
             println!("Detected state tmp file... removing")
         }
 
-        if let Err(e) = std::fs::remove_file(Path::new(NEW_STATE_FILE)) {
+        if let Err(e) = std::fs::remove_file(Path::new(&STATE_SWAP_FILE)) {
             panic!("failed to remove tmp state file: {e}");
         }
     }
 
     // open fd for filesystem root
     
-    let fs_root = OpenOptions::new().read(true).open(FS_ROOT_PATH);
+    let fs_root = OpenOptions::new().read(true).open(&FS_ROOT_PATH);
     if let Err(e) = fs_root {
-        panic!("open: {}\nFailed to open filesystem root at {}", e, FS_ROOT_PATH);
+        panic!("open: {}\nFailed to open filesystem root at {}", e, &FS_ROOT_PATH);
     }
 
     let fs_root = fs_root.unwrap();
@@ -135,7 +187,7 @@ fn main() {
     // MarFS config processing 
 
     let config;
-    match wrap_config_init(CONFIG_PATH.to_string()) {
+    match wrap_config_init(CONFIG_PATH) {
         Ok(c) => config = c,
         Err(e) => panic!("config_init: {}", e),
     }
@@ -146,8 +198,10 @@ fn main() {
         Ok(m) => ns_inode_map = m,
         Err(e) => panic!("nswrap_build_map: {e}"),
     }
-
-    println!("Running quota_update with starting state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
+    
+    if STATE_VERBOSE {
+        println!("Running quota_update with starting state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
+    }
 
     let start_time = Instant::now();
     let mut last_checkpoint = Duration::from_millis(0);
@@ -367,7 +421,7 @@ fn main() {
                         panic!("fsetxattr: {e} at {path}");
                     }
 
-                    if QUOTA_CHANGE_VERBOSE {
+                    if LOOP_VERBOSE {
                         println!("Namespace {} Quota + {}", &streamid_key, ftag.bytes);
                     }
 
@@ -379,7 +433,7 @@ fn main() {
                         panic!("fremovexattr: {e} at {path}");
                     }
 
-                    if QUOTA_CHANGE_VERBOSE {
+                    if LOOP_VERBOSE {
                         println!("Namespace {} Quota - {}", &streamid_key, ftag.bytes);
                     }
                     
@@ -410,7 +464,7 @@ fn main() {
                 let mut new_state_file = OpenOptions::new()
                                         .write(true)
                                         .create(true)
-                                        .open(NEW_STATE_FILE)
+                                        .open(&STATE_SWAP_FILE)
                                         .expect("failed to open temporary state file");
                 
                 let write_str = format!("{}\n{}\n{}", final_major.to_string(), final_ino.to_string(), final_minor.to_string());
@@ -419,9 +473,19 @@ fn main() {
                     panic!("failed to write new state: {}", e.to_string());
                 }
 
-                if let Err(e) = std::fs::rename(NEW_STATE_FILE, STATE_FILE) {
+                if let Err(e) = std::fs::rename(&STATE_SWAP_FILE, &STATE_FILE) {
                     panic!("failed to rename tmp state file: {}", e.to_string())
                 }
+                
+                // print an update for each checkpoint
+                if QUOTA_UPDATE_VERBOSE && !last_batch {
+                    println!("MAJOR {} CHECKPOINT:", final_major);
+                    if let Err(e) = nswrap_update_quota(config.rootns, fs_root.as_fd()) {
+                        panic!("nswrap_update_quota: {}", e);
+                    }
+                    println!("");
+                }
+
             }
 
             last_checkpoint = cur_time;
@@ -432,18 +496,21 @@ fn main() {
         }
        
     }
-
-    // update MarFS quotas every time even if nothing changes because some totals might lag behind
-    if let Err(e) = nswrap_update_quota(config.rootns, fs_root.as_fd()) {
-        panic!("nswrap_update_quota: {}", e);
+   
+    if QUOTA_UPDATE_VERBOSE { 
+        if let Err(e) = nswrap_update_quota(config.rootns, fs_root.as_fd()) {
+                panic!("nswrap_update_quota: {}", e);
+        }
     }
 
-    if final_major == 0 && final_ino == 0 && final_minor == 0 {
-        println!("Finished quota_update at final state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
-        return;
-    }
-    else {
-        println!("Finished quota_update at final state (major: {}, ino: {}, minor: {})", final_major, final_ino, final_minor);
+    if STATE_VERBOSE {
+        if final_major == 0 && final_ino == 0 && final_minor == 0 {
+            println!("Finished quota_update at final state (major: {}, ino: {}, minor: {})", starting_major, starting_ino, starting_minor);
+            return;
+        }
+        else {
+            println!("Finished quota_update at final state (major: {}, ino: {}, minor: {})", final_major, final_ino, final_minor);
+        }
     }
 
 }
@@ -528,4 +595,42 @@ fn get_streamid_key(ftag: FTAG) -> Result<String, String> {
         Ok(vec1.join("#"))
     }
 }
+
+/// MarFS quota management tool based on ScoutFS xattr accounting
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+        /// Frequency of checkpoints to the state file and mid run quota updates [default: 60000]
+        #[arg(short = 'm', long)]
+        checkpoint_ms: Option<u64>,
+        
+        /// Number of inodes to process in a single batch [default: 65536]
+        #[arg(short, long)]
+        batch_size: Option<usize>,
+
+        /// Path to MarFS config if not using $MARFS_CONFIG_PATH
+        #[arg(short = 'c', long)]
+        config_path: Option<String>,
+
+        /// Print info on start/final state and state file existence [default: true]
+        #[arg(short, long, action = ArgAction::SetTrue)]
+        state_verbose: Option<bool>,
+
+        /// Print details for each processing step for each file. For debugging purposes (lots of output) [default: false]
+        #[arg(short, long, action = ArgAction::SetTrue)]
+        loop_verbose: Option<bool>,
+
+        /// Print the updated quotas at each checkpoint and the end of the run [default: true]
+        #[arg(short, long, action = ArgAction::SetTrue)]
+        quota_update_verbose: Option<bool>,
+
+        /// Location of state file (and state swap file) [default: ".state"]
+        #[arg(short = 'p', long)]
+        state_file_path: Option<String>,
+       
+        /// Root of ScoutFS filesystem 
+        #[arg(short, long)]
+        root_scoutfs: String,
+}     
+
 

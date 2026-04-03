@@ -76,9 +76,9 @@ int rec_ns_subspace_walk_quota(marfs_ns* ns, struct scoutfs_ioctl_xattr_total* x
     int i = 0;
     while (xattr_totals_buf[i].name[2] != 0) {
         if (xattr_totals_buf[i].name[2] == (u64) ns_ino) {
-            // mdal->setdatausage to update trunc file
-            if (VERBOSE_C) {
-                printf("Updating %s quota to %d\n", path_str, xattr_totals_buf[i].total);
+            	
+	    if (VERBOSE_C) {
+	    	printf("%s%s QUOTA: %lld\n", repo_str, path_str, xattr_totals_buf[i].total);
             }
 
             // update quota file in namespace through MDAL
