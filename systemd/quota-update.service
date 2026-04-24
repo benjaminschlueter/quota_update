@@ -1,0 +1,17 @@
+[Unit]
+Description=Quota manager for MarFS with ScoutFS targets
+
+[Service]
+ExecStart=/home/bschlueter/quota_update/target/debug/quota_update --root-scoutfs /marfs/mdal-root -s -q --config-path /opt/campaign/install/etc/marfs-config.xml --state-file-path /home/bschlueter/quota_update/.state
+LimitNOFILE=65536
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+
+[Timer]
+OnCalendar=*-*-* *:00:00
+
+[Install]
+WantedBy=default.target
+
+

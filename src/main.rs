@@ -94,9 +94,9 @@ fn main() {
    
     let FS_ROOT_PATH = args.root_scoutfs;
     
-    let mut starting_major: i32 = 0;
-    let mut starting_ino: i32 = 0;
-    let mut starting_minor: i32 = 0;
+    let mut starting_major: i64 = 0;
+    let mut starting_ino: i64 = 0;
+    let mut starting_minor: i64 = 0;
 
     // read state from state file 
     let state_file_res = OpenOptions::new()
@@ -115,7 +115,7 @@ fn main() {
             }
 
             let input_vec: Vec<String> = starting_state_str.split("\n").map(|s| s.to_string()).collect();
-
+            
             starting_major = input_vec[0].trim().parse().expect("state file does not contain valid integer");
             starting_ino = input_vec[1].trim().parse().expect("state file does not contain valid integer");
             starting_minor = input_vec[2].trim().parse().expect("state file does not contain valid integer");
@@ -247,7 +247,11 @@ fn main() {
             
             // skip inode 1 (root directory)
             if ino == 1 {
-               continue;
+                final_major = major;
+                final_ino = ino;
+                final_minor = minor;
+     
+                continue;
             }
             
             let path_struct = ScoutwrapInoPath {
@@ -276,6 +280,10 @@ fn main() {
 
             // skip the quota file itself
             if path.contains(QUOTA_FILE_NAME) {
+                final_major = major;
+                final_ino = ino;
+                final_minor = minor;
+     
                 continue;
             }
 
@@ -321,6 +329,10 @@ fn main() {
                                 println!("MarFS xattr not found, skipping this file")
                             }
                             
+                            final_major = major;
+                            final_ino = ino;
+                            final_minor = minor;
+                             
                             continue;
                         }
                         else {
