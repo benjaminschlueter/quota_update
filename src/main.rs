@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 use quota_update::bindings::*;
 
 mod scoutwrap;
@@ -8,11 +10,11 @@ use nswrap::*;
 
 use std::alloc::{alloc, Layout};
 use std::env;
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{CStr, CString};
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::io::{BufReader, Read, Write};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
+use std::os::fd::{AsFd};
 use std::path::Path;
 use std::ptr;
 use std::time::{Duration, Instant};
@@ -402,7 +404,7 @@ fn main() {
                     None => panic!("no inode found for streamid {streamid_key}"),
                 }
 
-                let mut xattr_name = format!("scoutfs.hide.totl.acct.{}.{}.{}", int1, int2, int3);
+                let xattr_name = format!("scoutfs.hide.totl.acct.{}.{}.{}", int1, int2, int3);
 
                 if LOOP_VERBOSE {
                     println!("xattr name: {xattr_name}");
