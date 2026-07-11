@@ -1,0 +1,14 @@
+/target
+/run
+/src/nswrap/libnswrap.a
+/src/scoutwrap/libscoutwrap.a
+/src/marfs
+/src/scoutfs
+/.state
+/.state.new
+/build.log
+/create_test_files.sh
+/vendor
+/.cargo
+/src/bindings.rs
+

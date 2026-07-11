@@ -1,13 +1,16 @@
+#![allow(dead_code)]
+
+//use gufi_change_finder::bindings::*;
 use quota_update::*;
 
-use std::fs::File;
-use std::os::fd::AsRawFd;
 use std::ffi::CStr;
-use std::os::fd::BorrowedFd;
-use std::slice;
+use std::fs::File;
+use std::io::Error;
+use std::os::fd::{AsRawFd, BorrowedFd};
+use std::{mem, slice, str};
 
 pub const STR_BUF_SIZE: usize = 512;
-
+pub const MAX_HARDLINKS: usize = 8;
 
 /* Represents a point in the ScoutFS changelog.
  * @param major: major timestamp
@@ -24,7 +27,7 @@ pub struct ScoutwrapWalkInodesEntry {
 /* To be used with scoutwrap_walk_inodes()
  * @param first: starting point in the change log
  * @param last: stop point in the change log
- * @param entries_vec: to be populated with ScoutwrapWalkInodesEntry structs. Will be overwritten at the end of the function. 
+ * @param entries_vec: to be populated with ScoutwrapWalkInodesEntry structs. Will be overwritten at the end of the function.
  * @param nr_entries: tells ScoutFS the limit of entry structs to fill the buffer with
  * @param index: see ScoutFS ioctl.h for which macro to set this with
  */
@@ -37,79 +40,79 @@ pub struct ScoutwrapWalkInodes {
     pub index: u8,
 }
 
-
 /* WALK_INODES
- * Allocates and populates the entries_vec in user_arg to contain nr_entries entry structs from inodes within the minor:major range. This function allocates the buffer. The caller does not have to worry about setting up a buffer.  
- * Moves the callers struct inside, modifies and returns it. 
+ * Allocates and populates the entries_vec in user_arg to contain nr_entries entry structs from inodes within the minor:major range. This function allocates the buffer. The caller does not have to worry about setting up a buffer.
+ * Moves the callers struct inside, modifies and returns it.
  */
-pub fn scoutwrap_walk_inodes(root_fs: &File, mut user_arg: ScoutwrapWalkInodes) -> Result<ScoutwrapWalkInodes, String> {
-
+pub fn scoutwrap_walk_inodes(
+    root_fs: &File,
+    mut user_arg: ScoutwrapWalkInodes,
+) -> Result<ScoutwrapWalkInodes, String> {
     // create scoutfs_ioctl_walk_inodes and entries structs
 
     let first_c = scoutfs_ioctl_walk_inodes_entry {
-        major: user_arg.first.major as __u64,
-        ino: user_arg.first.ino as __u64,
-        minor: user_arg.first.minor as __u32,
+        major: user_arg.first.major as u64,
+        ino: user_arg.first.ino as u64,
+        minor: user_arg.first.minor as u32,
         _pad: [0u8; 4usize],
     };
-    
+
     let last_c = scoutfs_ioctl_walk_inodes_entry {
-        major: user_arg.last.major as __u64,
-        ino: user_arg.last.ino as __u64,
-        minor: user_arg.last.minor as __u32,
+        major: user_arg.last.major as u64,
+        ino: user_arg.last.ino as u64,
+        minor: user_arg.last.minor as u32,
         _pad: [0u8; 4usize],
     };
-    
+
     let entries_ptr;
     unsafe {
-        entries_ptr = libc::calloc(user_arg.nr_entries as usize, std::mem::size_of::<scoutfs_ioctl_walk_inodes_entry>());
+        entries_ptr = libc::calloc(
+            user_arg.nr_entries as usize,
+            mem::size_of::<scoutfs_ioctl_walk_inodes_entry>(),
+        );
         if entries_ptr.is_null() {
-            return Err(String::from("calloc: ") + &std::io::Error::last_os_error().to_string());
+            return Err(String::from("calloc: ") + &Error::last_os_error().to_string());
         }
     }
-
 
     let mut user = scoutfs_ioctl_walk_inodes {
         first: first_c,
         last: last_c,
         entries_ptr: entries_ptr as u64,
-        nr_entries: user_arg.nr_entries as u32, 
+        nr_entries: user_arg.nr_entries as u32,
         index: user_arg.index,
         _pad: [0u8; 11usize],
     };
-   
-    let entries_c; 
+
+    // call ioctl and take ownership of returned buffer
+    let entries_c;
     unsafe {
         if wrap_walk_inodes(root_fs.as_raw_fd(), &mut user) == -1 {
-            return Err(std::io::Error::last_os_error().to_string());
+            return Err(Error::last_os_error().to_string());
         }
 
         // takes ownership of the calloc buffer and will drop it
-        entries_c = Vec::from_raw_parts(user.entries_ptr as *mut scoutfs_ioctl_walk_inodes_entry, user.nr_entries as usize, user.nr_entries as usize);
-    }        
-     
-    let mut entries = Vec::<ScoutwrapWalkInodesEntry>::new();
-    
-    // add entries to the rust buffer until the end is found
-    for entry in &entries_c {
+        entries_c = Vec::from_raw_parts(
+            user.entries_ptr as *mut scoutfs_ioctl_walk_inodes_entry,
+            user.nr_entries as usize,
+            user.nr_entries as usize,
+        );
+    }
 
-        if entry.major == 0 && entry.ino == 0 && entry.minor == 0 {
-            break;
-        }
-
-        let tmp = ScoutwrapWalkInodesEntry { 
-            major: entry.major as u64, 
-            ino: entry.ino as u64,
-            minor: entry.minor as u32,
-        };
-
-        entries.push(tmp);
-    }   
+    // convert to unpadded rust struct and drop empties
+    let entries = entries_c
+        .into_iter()
+        .filter(|entry_c| !(entry_c.major == 0 && entry_c.ino == 0 && entry_c.minor == 0))
+        .map(|entry_c| ScoutwrapWalkInodesEntry {
+            major: entry_c.major,
+            ino: entry_c.ino,
+            minor: entry_c.minor,
+        })
+        .collect();
 
     user_arg.entries_vec = entries;
 
     Ok(user_arg)
-
 }
 
 /* Input for INO_PATH ioctl function
@@ -128,6 +131,7 @@ pub struct ScoutwrapInoPath {
 #[derive(Debug, Clone)]
 pub struct ScoutwrapInoPathResult {
     pub ino: u64,
+    pub dir_ino: u64,
     pub dir_pos: u64,
     pub path_bytes: u16,
     pub path: String,
@@ -138,11 +142,15 @@ pub struct ScoutwrapInoPathResult {
  * @param path_arg: struct with input for scoutfs ioctl
  * @return ioctl result struct
  */
-pub fn scoutwrap_ino_path(root_fs: &File, path_arg: ScoutwrapInoPath) -> Result<ScoutwrapInoPathResult, String> {
-   
+pub fn scoutwrap_ino_path(
+    root_fs: &File,
+    path_arg: ScoutwrapInoPath,
+) -> Result<ScoutwrapInoPathResult, String> {
+    // ioctl function buffer
     let result_ptr;
     unsafe {
-        result_ptr = libc::calloc(1, STR_BUF_SIZE);
+        // make this buffer extra big in case of many log paths
+        result_ptr = libc::calloc(1, STR_BUF_SIZE * 16);
     }
 
     let mut path_c = scoutfs_ioctl_ino_path {
@@ -151,32 +159,37 @@ pub fn scoutwrap_ino_path(root_fs: &File, path_arg: ScoutwrapInoPath) -> Result<
         dir_pos: path_arg.dir_pos,
         result_ptr: result_ptr as u64,
         result_bytes: STR_BUF_SIZE as u16,
-        _pad:[0u8; 6usize],
+        _pad: [0u8; 6usize],
     };
-    
+
+    // extra paths returned by looped calls and dir_* updates
+
     unsafe {
         if wrap_ino_path(root_fs.as_raw_fd(), &mut path_c) == -1 {
-            return Err(std::io::Error::last_os_error().to_string());
+            return Err(Error::last_os_error().to_string());
         }
     }
 
+    // get string from return buffer
+    let entry_c;
     let ret_str;
     unsafe {
-        // ensure we only get the first string if buffer contains multiple
-        let entries_c = Vec::from_raw_parts(path_c.result_ptr as *mut scoutfs_ioctl_ino_path_result, 1, 1);
-        let path_ptr = entries_c[0].path.as_ptr() as *const i8;
-        
+        entry_c = path_c.result_ptr as *mut scoutfs_ioctl_ino_path_result;
+
+        let path_ptr = (*entry_c).path.as_ptr() as *const i8;
+
         ret_str = CStr::from_ptr(path_ptr).to_str().unwrap().to_owned();
+
+        let ret_struct = ScoutwrapInoPathResult {
+            ino: path_arg.ino,
+            dir_ino: (*entry_c).dir_ino,
+            dir_pos: (*entry_c).dir_pos,
+            path_bytes: path_arg.result_bytes as u16,
+            path: ret_str,
+        };
+
+        return Ok(ret_struct);
     }
-
-    let ret_struct = ScoutwrapInoPathResult {
-        ino: path_arg.ino,
-        dir_pos: path_arg.dir_pos,
-        path_bytes: path_arg.result_bytes as u16,
-        path: ret_str,
-    };
-
-    return Ok(ret_struct)
 }
 
 #[derive(Debug, Clone)]
@@ -192,49 +205,44 @@ pub struct ScoutwrapListxattrHidden {
  * @param xattr_arg
  * @return vector of owned strings with all xattr names
  */
-pub fn scoutwrap_listxattr_hidden(fd: BorrowedFd, xattr_arg: ScoutwrapListxattrHidden) -> Result<Vec<String>, String> {
-    
+pub fn scoutwrap_listxattr_hidden(
+    fd: BorrowedFd,
+    xattr_arg: ScoutwrapListxattrHidden,
+) -> Result<Vec<String>, String> {
     unsafe {
-
         let buf = libc::calloc(1, STR_BUF_SIZE);
 
         let mut existing_xattrs = scoutfs_ioctl_listxattr_hidden {
-                id_pos: xattr_arg.id_pos,
-                buf_ptr: buf as u64,
-                buf_bytes: STR_BUF_SIZE as u32,
-                hash_pos: xattr_arg.hash_pos,
+            id_pos: xattr_arg.id_pos,
+            buf_ptr: buf as u64,
+            buf_bytes: STR_BUF_SIZE as u32,
+            hash_pos: xattr_arg.hash_pos,
         };
 
         if wrap_listxattr_hidden(fd.as_raw_fd(), &mut existing_xattrs) == -1 {
-            return Err(std::io::Error::last_os_error().to_string());
+            return Err(Error::last_os_error().to_string());
         }
 
         // create vector of strings to return
-        let buf = slice::from_raw_parts(existing_xattrs.buf_ptr as *const u8, existing_xattrs.buf_bytes as usize);
-        let xattr_str_vec = buf.split(|b| *b == 0) // create an iterator over null terminated string subslices
-                .filter_map(|slice| {
+        let buf = slice::from_raw_parts(
+            existing_xattrs.buf_ptr as *const u8,
+            existing_xattrs.buf_bytes as usize,
+        );
+        let xattr_str_vec = buf
+            .split(|b| *b == 0) // create an iterator over null terminated string subslices
+            .filter_map(|slice| {
+                if slice.is_empty() {
+                    return None;
+                }
 
-                        if slice.is_empty() {
-                            return None;
-                        }
-
-                        match std::str::from_utf8(slice) {
-                            Ok(s) => Some(s.to_owned()),
-                            Err(e) => Some(String::from("error: failed to parse slice into utf8")),
-
-                            // CALLER IS RESPONSIBLE FOR CHECKING VECTOR FOR ERROR STRINGS
-                        }
-                }).collect();
+                match str::from_utf8(slice) {
+                    Ok(s) => Some(s.to_owned()),
+                    Err(_) => Some(String::from("error: failed to parse slice into utf8")),
+                    // CALLER IS RESPONSIBLE FOR CHECKING VECTOR FOR ERROR STRINGS
+                }
+            })
+            .collect();
 
         return Ok(xattr_str_vec);
     }
 }
-
-
-
-
-
-
-
-
-
