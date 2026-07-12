@@ -6,7 +6,6 @@
 /src/scoutfs
 /.state
 /.state.new
-/build.log
 /create_test_files.sh
 /vendor
 /.cargo

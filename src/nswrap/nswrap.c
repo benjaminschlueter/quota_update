@@ -22,13 +22,13 @@ int nswrap_update_quota_c(marfs_ns* root_ns, int root_fd) {
     // scoutfs ioctl: get (inode, usage) buffer
     struct scoutfs_ioctl_read_xattr_totals *totals = calloc(1, sizeof(struct scoutfs_ioctl_read_xattr_totals));
     totals->totals_bytes = 4096;
-    totals->totals_ptr = calloc(1, totals->totals_bytes);
+    totals->totals_ptr = (__u64) calloc(1, totals->totals_bytes);
 
     if (ioctl(root_fd, SCOUTFS_IOC_READ_XATTR_TOTALS, totals) < 0) {
             perror("ioctl(SCOUTFS_IOC_READ_XATTR_TOTALS)");
     }
     
-    struct scoutfs_ioctl_xattr_total *xattr_totals_buf = totals->totals_ptr;
+    struct scoutfs_ioctl_xattr_total *xattr_totals_buf = (struct scoutfs_ioctl_xattr_total *) totals->totals_ptr;
 
     if (xattr_totals_buf == NULL) {
         return -1;
