@@ -8,16 +8,14 @@ use scoutwrap::*;
 mod nswrap;
 use nswrap::*;
 
-use std::alloc::{alloc, Layout};
 use std::env;
-use std::ffi::{CStr, CString};
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::io::{BufReader, Read, Write};
-use std::os::fd::{AsFd};
+use std::os::fd::AsFd;
 use std::path::Path;
-use std::ptr;
 use std::time::{Duration, Instant};
+use std::ffi::{CStr};
 
 use nix::fcntl::OFlag;
 use nix::sys::stat::fstat;
@@ -557,66 +555,10 @@ fn main() {
         }
     }
 }
-/* Hide ugliness of calling config_init from Rust
- * @param config_path: path of config to use or empty for env var MARFS_CONFIG_PATH
- * @return marfs_config struct
- */
-fn wrap_config_init(config_path: String) -> Result<marfs_config, String> {
-    let layout = Layout::new::<pthread_mutex_t>();
-    let erasure_lock;
-    unsafe {
-        erasure_lock = alloc(layout) as *mut pthread_mutex_t; // allocate memory for pthread_mutex_t
-        pthread_mutex_init(erasure_lock, ptr::null());
-
-        let config;
-        if config_path.is_empty() {
-            config = config_init(
-                CString::new(env::var("MARFS_CONFIG_PATH").expect("MARFS_CONFIG_PATH not set"))
-                    .expect("bad MARFS_CONFIG_PATH string")
-                    .as_ptr(),
-                erasure_lock,
-            );
-        } else {
-            config = config_init(
-                CString::new(config_path)
-                    .expect("bad config_path string")
-                    .as_ptr(),
-                erasure_lock,
-            );
-        }
-
-        if config.is_null() {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-
-        Ok(*config)
-    }
-}
-/* Hide ugly unsafe code of creating FTAG from marfs xattr
- */
-fn get_ftag(marfs_xattr: &str) -> Result<FTAG, String> {
-    unsafe {
-        let ftag_buf = libc::calloc(1, std::mem::size_of::<FTAG>());
-
-        if ftag_initstr(
-            ftag_buf as *mut FTAG,
-            CString::new(marfs_xattr)
-                .expect("bad xattr string")
-                .as_ptr() as *mut i8,
-        ) == -1
-        {
-            return Err(String::from("ftag_initstr returned an error"));
-        }
-
-        let ftag = Vec::from_raw_parts(ftag_buf as *mut FTAG, 1, 1)[0];
-
-        return Ok(ftag);
-    }
-}
 
 /* Return owned string if xattr contains, INIT, COMP or neither
  */
-fn get_marfs_file_mode(marfs_xattr: &str) -> Result<String, String> {
+pub fn get_marfs_file_mode(marfs_xattr: &str) -> Result<String, String> {
     if marfs_xattr.contains("INIT") {
         return Ok(String::from("INIT"));
     } else if marfs_xattr.contains("COMP") {
@@ -630,7 +572,7 @@ fn get_marfs_file_mode(marfs_xattr: &str) -> Result<String, String> {
  * @param ftag: FTAG struct for this file
  * @return: owned string with format <REPO>##<NS1>#<NS2>#<NS...>
  */
-fn get_streamid_key(ftag: FTAG) -> Result<String, String> {
+pub fn get_streamid_key(ftag: FTAG) -> Result<String, String> {
     unsafe {
         let full = CStr::from_ptr(ftag.streamid as *const i8)
             .to_str()
