@@ -15,7 +15,6 @@ use std::io::{BufReader, Read, Write};
 use std::os::fd::AsFd;
 use std::path::Path;
 use std::time::{Duration, Instant};
-use std::ffi::{CStr};
 
 use nix::fcntl::OFlag;
 use nix::sys::stat::fstat;
@@ -23,7 +22,7 @@ use nix::sys::stat::{Mode, SFlag};
 
 use rustix::fs::XattrFlags;
 
-use clap::{ArgAction, Parser};
+use clap::Parser;
 
 const QUOTA_MAGIC_NUM: u32 = 123;
 const QUOTA_FILE_NAME: &str = "MDAL_datasize";
@@ -36,64 +35,14 @@ fn main() {
 
     let args = Args::parse();
 
-    // set vars
-    let CHECKPOINT_MS: u64; // WARNING: will fail to update state file if this is too small (< 100)
-    match args.checkpoint_ms {
-        Some(m) => CHECKPOINT_MS = m,
-        None => CHECKPOINT_MS = 60000,
-    }
-
-    let BATCH_SIZE: usize;
-    match args.batch_size {
-        Some(b) => BATCH_SIZE = b,
-        None => BATCH_SIZE = 65536,
-    }
-
-    let STATE_VERBOSE = args.state_verbose.unwrap();
-    let LOOP_VERBOSE = args.loop_verbose.unwrap();
-    let QUOTA_UPDATE_VERBOSE = args.quota_update_verbose.unwrap();
-
-    /*
-    match args.state_verbose {
-        Some(s) => STATE_VERBOSE = s,
-        None => STATE_VERBOSE = true,
-    }
-
-    let LOOP_VERBOSE: bool;
-    match args.loop_verbose {
-        Some(l) => LOOP_VERBOSE = l,
-        None => LOOP_VERBOSE = false,
-    }
-
-    let QUOTA_UPDATE_VERBOSE: bool;
-    match args.quota_update_verbose {
-        Some(q) => QUOTA_UPDATE_VERBOSE = q,
-        None => QUOTA_UPDATE_VERBOSE = true,
-    }
-    */
-
-    let CONFIG_PATH: String;
-    match args.config_path {
-        Some(p) => CONFIG_PATH = p,
-        None => {
-            CONFIG_PATH = env::var("MARFS_CONFIG_PATH")
-                .expect("no config path provided and MARFS_CONFIG_PATH not set")
-        }
-    }
-
-    let STATE_FILE: String;
-    let STATE_SWAP_FILE: String;
-    match args.state_file_path {
-        Some(p) => {
-            STATE_FILE = p;
-            STATE_SWAP_FILE = format!("{STATE_FILE}.swp");
-        }
-        None => {
-            STATE_FILE = String::from(".state");
-            STATE_SWAP_FILE = String::from(".state.swp");
-        }
-    }
-
+    let CHECKPOINT_MS = args.checkpoint_ms;
+    let BATCH_SIZE = args.batch_size;
+    let STATE_VERBOSE = args.state_verbose;
+    let LOOP_VERBOSE = args.loop_verbose;
+    let QUOTA_UPDATE_VERBOSE = args.quota_update_verbose;
+    let CONFIG_PATH = args.config_path;
+    let STATE_FILE = args.state_file_path;
+    let STATE_SWAP_FILE = format!("{STATE_FILE}.swp");
     let FS_ROOT_PATH = args.root_scoutfs;
 
     let mut starting_major: i64 = 0;
@@ -568,62 +517,37 @@ pub fn get_marfs_file_mode(marfs_xattr: &str) -> Result<String, String> {
     }
 }
 
-/* Turns FTAG.streamid into a namespace unique key for the hash table
- * @param ftag: FTAG struct for this file
- * @return: owned string with format <REPO>##<NS1>#<NS2>#<NS...>
- */
-pub fn get_streamid_key(ftag: FTAG) -> Result<String, String> {
-    unsafe {
-        let full = CStr::from_ptr(ftag.streamid as *const i8)
-            .to_str()
-            .expect("bad streamid string")
-            .to_owned();
-
-        let mut vec1: Vec<String> = full.split("#").map(|s| s.to_string()).collect();
-
-        if vec1.len() < 3 {
-            return Err(String::from(
-                "incorrect vec1 length during streamid parsing",
-            ));
-        }
-
-        vec1.pop();
-
-        Ok(vec1.join("#"))
-    }
-}
-
 /// MarFS quota management tool based on ScoutFS xattr accounting
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Frequency of checkpoints to the state file and mid run quota updates [default: 60000]
-    #[arg(short = 'm', long)]
-    checkpoint_ms: Option<u64>,
+    /// Frequency of checkpoints to the state file and mid run quota updates
+    #[arg(short = 'm', long, default_value_t = 60000)]
+    checkpoint_ms: u64,
 
-    /// Number of inodes to process in a single batch [default: 65536]
-    #[arg(short, long)]
-    batch_size: Option<usize>,
+    /// Number of inodes to process in a single batch
+    #[arg(short, long, default_value_t = 65536)]
+    batch_size: usize,
 
     /// Path to MarFS config if not using $MARFS_CONFIG_PATH
-    #[arg(short = 'c', long)]
-    config_path: Option<String>,
+    #[arg(short = 'c', long, default_value_t = env::var("MARFS_CONFIG_PATH").expect("MARFS_CONFIG_PATH not set"))]
+    config_path: String,
 
     /// Print info on start/final state and state file existence [default: true]
-    #[arg(short, long, action = ArgAction::SetTrue)]
-    state_verbose: Option<bool>,
+    #[arg(short, long)]
+    state_verbose: bool,
 
     /// Print details for each processing step for each file. For debugging purposes (lots of output) [default: false]
-    #[arg(short, long, action = ArgAction::SetTrue)]
-    loop_verbose: Option<bool>,
+    #[arg(short, long)]
+    loop_verbose: bool,
 
     /// Print the updated quotas at each checkpoint and the end of the run [default: true]
-    #[arg(short, long, action = ArgAction::SetTrue)]
-    quota_update_verbose: Option<bool>,
+    #[arg(short, long)]
+    quota_update_verbose: bool,
 
     /// Location of state file (and state swap file) [default: ".state"]
-    #[arg(short = 'p', long)]
-    state_file_path: Option<String>,
+    #[arg(short = 'p', long, default_value_t = String::from(".state"))]
+    state_file_path: String,
 
     /// Root of ScoutFS filesystem
     #[arg(short, long)]

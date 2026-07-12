@@ -125,3 +125,27 @@ pub fn get_ftag(marfs_xattr: &str) -> Result<FTAG, String> {
     }
 }
 
+/* Turns FTAG.streamid into a namespace unique key for the hash table
+ * @param ftag: FTAG struct for this file
+ * @return: owned string with format <REPO>##<NS1>#<NS2>#<NS...>
+ */
+pub fn get_streamid_key(ftag: FTAG) -> Result<String, String> {
+    unsafe {
+        let full = CStr::from_ptr(ftag.streamid as *const i8)
+            .to_str()
+            .expect("bad streamid string")
+            .to_owned();
+
+        let mut vec1: Vec<String> = full.split("#").map(|s| s.to_string()).collect();
+
+        if vec1.len() < 3 {
+            return Err(String::from(
+                "incorrect vec1 length during streamid parsing",
+            ));
+        }
+
+        vec1.pop();
+
+        Ok(vec1.join("#"))
+    }
+}
